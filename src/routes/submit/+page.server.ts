@@ -66,7 +66,7 @@ export const actions: Actions = {
       });
     }
 
-    const id = createPost({
+    const id = await createPost({
       userId: locals.user.id,
       title,
       url,
@@ -77,7 +77,7 @@ export const actions: Actions = {
     // Best-effort background-ish summary; don't block on failure.
     try {
       const { summary } = await summarize({ title, body, url });
-      if (summary) setAiSummary(id, summary);
+      if (summary) await setAiSummary(id, summary);
     } catch {
       /* ignore */
     }

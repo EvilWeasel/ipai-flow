@@ -9,7 +9,7 @@ A lightweight, Hacker News–style community discussion platform built for the I
 - **SvelteKit** (Svelte 5, runes) + **TypeScript**
 - **Tailwind CSS v4** with shadcn-style design tokens
 - **shadcn-svelte**–style components (Button, Input, Textarea, Label, Card, Badge) implemented locally with `tailwind-variants` + `bits-ui`
-- **better-sqlite3** for a single-file, self-hosted database (no external services needed)
+- **Supabase (Postgres)** for a shared online database (free tier available)
 - **bcryptjs** + cookie sessions for auth
 - **`@sveltejs/adapter-node`** for self-hosting
 - Optional **OpenAI-compatible** endpoint for summaries / moderation (works fully offline without it)
@@ -23,7 +23,7 @@ A lightweight, Hacker News–style community discussion platform built for the I
 - AI-assisted summaries on each post (regenerable)
 - AI-assisted moderation on submissions and comments
 - Automated **digest** view that bundles the top posts of the last _N_ hours with an AI overview
-- 100% self-hosted, single SQLite file
+- Shared online data via Supabase so all users see the same content
 
 ## Getting started
 
@@ -42,7 +42,8 @@ Open http://localhost:5173.
 | `OPENAI_API_KEY`  | Enable AI summary + moderation. Leave blank for offline fallback.                           |
 | `OPENAI_MODEL`    | Model name (default `gpt-4o-mini`).                                                         |
 | `OPENAI_BASE_URL` | OpenAI-compatible endpoint (defaults to OpenAI; works with self-hosted Ollama, vLLM, etc.). |
-| `DATABASE_FILE`   | SQLite file path (default `data/ipai-flow.db`).                                             |
+| `SUPABASE_URL`    | Supabase project URL.                                                                        |
+| `SUPABASE_ANON_KEY` | Supabase anon key used by server-side data layer.                                          |
 
 ### Production
 
@@ -61,7 +62,7 @@ src/
   lib/
     components/ui/           # shadcn-style UI primitives
     server/
-      db.ts                  # SQLite + schema
+      db.ts                  # Supabase client + shared types
       auth.ts                # password hashing + sessions
       posts.ts               # data access (posts, comments, votes)
       ai.ts                  # summarise + moderate (with offline fallback)
@@ -78,7 +79,7 @@ src/
 
 ## GDPR & self-hosting notes
 
-- Single SQLite file in `data/` — easy to back up, delete, or move.
+- Data is stored in your Supabase Postgres project (shared across all users).
 - No third-party trackers, no external CDNs at runtime.
 - AI calls are **opt-in**. Without an API key the app uses a deterministic local extractive summary and heuristic moderation.
 - Accounts only require a username + password — no email, no PII collected.

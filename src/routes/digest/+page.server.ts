@@ -6,8 +6,8 @@ export const load: PageServerLoad = async ({ url }) => {
   const hours = Number(url.searchParams.get("hours") ?? "24");
   const window =
     Number.isFinite(hours) && hours > 0 && hours <= 24 * 30 ? hours : 24;
-  const posts = getDigest(window);
-  const trendingTags = getTrendingTags(window);
+  const posts = await getDigest(window);
+  const trendingTags = await getTrendingTags(window);
 
   let intro = "";
   if (posts.length > 0) {

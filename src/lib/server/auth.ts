@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 import { randomBytes } from "node:crypto";
-import { db, now, type User } from "./db";
+import { now, supabase, type User } from "./db";
 import type { Cookies } from "@sveltejs/kit";
 
 const SESSION_COOKIE = "ipai_session";
@@ -17,38 +17,50 @@ export async function verifyPassword(
   return bcrypt.compare(password, hash);
 }
 
-export function createSession(userId: number): string {
+function must<T>(value: T, message: string): T {
+  if (value == null) throw new Error(message);
+  return value;
+}
+
+export async function createSession(userId: number): Promise<string> {
   const id = randomBytes(32).toString("hex");
   const expiresAt = now() + SESSION_TTL_DAYS * 86400;
-  db.prepare(
-    "INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)",
-  ).run(id, userId, expiresAt);
+  const { error } = await supabase
+    .from("sessions")
+    .insert({ id, user_id: userId, expires_at: expiresAt });
+  if (error) throw new Error(`Failed to create session: ${error.message}`);
   return id;
 }
 
-export function getUserBySession(sessionId: string): User | null {
-  const row = db
-    .prepare(
-      `SELECT u.id, u.username, u.karma, u.created_at, s.expires_at
-			 FROM sessions s JOIN users u ON u.id = s.user_id
-			 WHERE s.id = ?`,
-    )
-    .get(sessionId) as (User & { expires_at: number }) | undefined;
-  if (!row) return null;
-  if (row.expires_at < now()) {
-    db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
+export async function getUserBySession(sessionId: string): Promise<User | null> {
+  const { data: session, error: sessionError } = await supabase
+    .from("sessions")
+    .select("user_id, expires_at")
+    .eq("id", sessionId)
+    .maybeSingle();
+  if (sessionError) {
+    throw new Error(`Failed to load session: ${sessionError.message}`);
+  }
+  if (!session) return null;
+  if (session.expires_at < now()) {
+    await deleteSession(sessionId);
     return null;
   }
-  return {
-    id: row.id,
-    username: row.username,
-    karma: row.karma,
-    created_at: row.created_at,
-  };
+
+  const { data: user, error: userError } = await supabase
+    .from("users")
+    .select("id, username, karma, created_at")
+    .eq("id", session.user_id)
+    .maybeSingle();
+  if (userError) {
+    throw new Error(`Failed to load user: ${userError.message}`);
+  }
+  return (user as User | null) ?? null;
 }
 
-export function deleteSession(sessionId: string): void {
-  db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
+export async function deleteSession(sessionId: string): Promise<void> {
+  const { error } = await supabase.from("sessions").delete().eq("id", sessionId);
+  if (error) throw new Error(`Failed to delete session: ${error.message}`);
 }
 
 export function setSessionCookie(cookies: Cookies, sessionId: string): void {
@@ -71,4 +83,44 @@ export function getSessionCookie(cookies: Cookies): string | undefined {
 
 export function isValidUsername(username: string): boolean {
   return /^[a-zA-Z0-9_-]{3,32}$/.test(username);
+}
+
+export async function getUserAuthByUsername(
+  username: string,
+): Promise<{ id: number; password_hash: string } | null> {
+  const { data, error } = await supabase
+    .from("users")
+    .select("id, password_hash")
+    .eq("username", username)
+    .maybeSingle();
+  if (error) throw new Error(`Failed to load user auth: ${error.message}`);
+  return (data as { id: number; password_hash: string } | null) ?? null;
+}
+
+export async function usernameExists(username: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("users")
+    .select("id")
+    .eq("username", username)
+    .maybeSingle();
+  if (error) throw new Error(`Failed to check username: ${error.message}`);
+  return Boolean(data);
+}
+
+export async function createUser(input: {
+  username: string;
+  password_hash: string;
+}): Promise<number> {
+  const { data, error } = await supabase
+    .from("users")
+    .insert({
+      username: input.username,
+      password_hash: input.password_hash,
+      created_at: now(),
+      karma: 0,
+    })
+    .select("id")
+    .single();
+  if (error) throw new Error(`Failed to create user: ${error.message}`);
+  return must(data?.id, "Missing inserted user id");
 }

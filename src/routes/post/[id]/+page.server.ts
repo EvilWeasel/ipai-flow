@@ -6,9 +6,9 @@ import { moderate } from "$lib/server/ai";
 export const load: PageServerLoad = async ({ params, locals }) => {
   const id = Number(params.id);
   if (!Number.isFinite(id)) throw error(400, "invalid id");
-  const post = getPost(id, locals.user?.id ?? 0);
+  const post = await getPost(id, locals.user?.id ?? 0);
   if (!post) throw error(404, "not found");
-  const comments = getComments(id, locals.user?.id ?? 0);
+  const comments = await getComments(id, locals.user?.id ?? 0);
   return { post, comments };
 };
 
@@ -29,7 +29,7 @@ export const actions: Actions = {
         message: `blocked by moderation: ${mod.reason ?? "unsafe"}`,
       });
     }
-    createComment({ userId: locals.user.id, postId: id, parentId, body });
+    await createComment({ userId: locals.user.id, postId: id, parentId, body });
     return { ok: true };
   },
   vote: async ({ request, locals }) => {
@@ -44,7 +44,7 @@ export const actions: Actions = {
     ) {
       return fail(400, { message: "invalid vote" });
     }
-    vote({
+    await vote({
       userId: locals.user.id,
       kind,
       targetId,
