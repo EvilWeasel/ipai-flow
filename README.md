@@ -22,7 +22,7 @@ A lightweight, Hacker News–style community discussion platform built for the I
 - User accounts with karma (no email required → GDPR-friendly)
 - AI-assisted summaries on each post (regenerable)
 - AI-assisted moderation on submissions and comments
-- Automated **digest** view that bundles the top posts of the last *N* hours with an AI overview
+- Automated **digest** view that bundles the top posts of the last _N_ hours with an AI overview
 - 100% self-hosted, single SQLite file
 
 ## Getting started
@@ -37,12 +37,12 @@ Open http://localhost:5173.
 
 ### Environment
 
-| Variable | Purpose |
-|---|---|
-| `OPENAI_API_KEY` | Enable AI summary + moderation. Leave blank for offline fallback. |
-| `OPENAI_MODEL` | Model name (default `gpt-4o-mini`). |
+| Variable          | Purpose                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| `OPENAI_API_KEY`  | Enable AI summary + moderation. Leave blank for offline fallback.                           |
+| `OPENAI_MODEL`    | Model name (default `gpt-4o-mini`).                                                         |
 | `OPENAI_BASE_URL` | OpenAI-compatible endpoint (defaults to OpenAI; works with self-hosted Ollama, vLLM, etc.). |
-| `DATABASE_FILE` | SQLite file path (default `data/ipai-flow.db`). |
+| `DATABASE_FILE`   | SQLite file path (default `data/ipai-flow.db`).                                             |
 
 ### Production
 
@@ -82,3 +82,7 @@ src/
 - No third-party trackers, no external CDNs at runtime.
 - AI calls are **opt-in**. Without an API key the app uses a deterministic local extractive summary and heuristic moderation.
 - Accounts only require a username + password — no email, no PII collected.
+
+## Initial Design Document
+
+https://stitch.withgoogle.com/projects/14845179408125488378
