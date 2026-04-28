@@ -59,24 +59,39 @@ export function createPost(input: {
   title: string;
   url: string | null;
   body: string | null;
+  tags: string | null;
 }): number {
   const stmt = db.prepare(
-    `INSERT INTO posts (user_id, title, url, body, created_at, score)
-		 VALUES (?, ?, ?, ?, ?, 1)`,
+    `INSERT INTO posts (user_id, title, url, body, tags, created_at, score)
+		 VALUES (?, ?, ?, ?, ?, ?, 1)`,
   );
   const result = stmt.run(
     input.userId,
     input.title,
     input.url,
     input.body,
+    input.tags,
     now(),
   );
   const postId = Number(result.lastInsertRowid);
-  // auto-upvote own post
   db.prepare(
     `INSERT INTO votes (user_id, target_kind, target_id, value, created_at) VALUES (?, 'post', ?, 1, ?)`,
   ).run(input.userId, postId, now());
   return postId;
+}
+
+export function parseTags(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((t) => t.trim().replace(/^#/, ""))
+    .filter((t) => /^[a-zA-Z0-9_-]{1,32}$/.test(t))
+    .slice(0, 5);
+}
+
+export function normalizeTagsInput(raw: string): string | null {
+  const tags = parseTags(raw);
+  return tags.length ? tags.join(",") : null;
 }
 
 export function createComment(input: {
@@ -168,6 +183,25 @@ export function setAiSummary(postId: number, summary: string): void {
 
 export function flagPost(postId: number): void {
   db.prepare("UPDATE posts SET flagged = 1 WHERE id = ?").run(postId);
+}
+
+export function getTrendingTags(hours: number, limit = 8): string[] {
+  const since = now() - hours * 3600;
+  const rows = db
+    .prepare(
+      `SELECT tags FROM posts WHERE flagged = 0 AND created_at >= ? AND tags IS NOT NULL AND tags != ''`,
+    )
+    .all(since) as { tags: string }[];
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    for (const tag of parseTags(row.tags)) {
+      counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([t]) => t);
 }
 
 export function getDigest(hours: number): Post[] {

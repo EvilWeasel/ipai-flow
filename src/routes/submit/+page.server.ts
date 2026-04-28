@@ -1,6 +1,6 @@
 import type { PageServerLoad, Actions } from "./$types";
 import { fail, redirect } from "@sveltejs/kit";
-import { createPost } from "$lib/server/posts";
+import { createPost, normalizeTagsInput } from "$lib/server/posts";
 import { moderate, summarize } from "$lib/server/ai";
 import { setAiSummary } from "$lib/server/posts";
 
@@ -27,6 +27,7 @@ export const actions: Actions = {
     const title = String(form.get("title") ?? "").trim();
     const urlRaw = String(form.get("url") ?? "").trim();
     const body = String(form.get("body") ?? "").trim();
+    const tagsRaw = String(form.get("tags") ?? "").trim();
 
     if (title.length < 4 || title.length > 200) {
       return fail(400, {
@@ -34,11 +35,12 @@ export const actions: Actions = {
         title,
         urlRaw,
         body,
+        tagsRaw,
       });
     }
     const url = urlRaw ? normalizeUrl(urlRaw) : null;
     if (urlRaw && !url) {
-      return fail(400, { message: "invalid URL", title, urlRaw, body });
+      return fail(400, { message: "invalid URL", title, urlRaw, body, tagsRaw });
     }
     if (!url && !body) {
       return fail(400, {
@@ -46,10 +48,11 @@ export const actions: Actions = {
         title,
         urlRaw,
         body,
+        tagsRaw,
       });
     }
     if (body && body.length > 20_000) {
-      return fail(400, { message: "text too long", title, urlRaw, body });
+      return fail(400, { message: "text too long", title, urlRaw, body, tagsRaw });
     }
 
     const mod = await moderate([title, body].filter(Boolean).join("\n\n"));
@@ -59,6 +62,7 @@ export const actions: Actions = {
         title,
         urlRaw,
         body,
+        tagsRaw,
       });
     }
 
@@ -67,6 +71,7 @@ export const actions: Actions = {
       title,
       url,
       body: body || null,
+      tags: normalizeTagsInput(tagsRaw),
     });
 
     // Best-effort background-ish summary; don't block on failure.

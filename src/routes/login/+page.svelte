@@ -6,26 +6,32 @@
 	let { form } = $props();
 </script>
 
-<div class="mx-auto max-w-md px-4 py-12">
-	<h1 class="text-2xl font-bold mb-1">Log in</h1>
-	<p class="text-sm text-muted-foreground mb-6">Welcome back to IPAI Flow.</p>
+<div class="mx-auto max-w-md px-4 py-10">
+	<header class="mb-6 text-center">
+		<h1 class="text-3xl font-bold tracking-tight">Welcome back</h1>
+		<p class="text-sm text-muted-foreground mt-1">Log in to the IPAI Community.</p>
+	</header>
 
-	<form method="POST" class="space-y-4">
+	<form method="POST" class="rounded-lg border bg-card p-5 space-y-4">
 		<div class="space-y-1.5">
-			<Label for="username">Username</Label>
+			<Label for="username" class="text-xs uppercase tracking-wider text-muted-foreground">
+				Username
+			</Label>
 			<Input id="username" name="username" required value={form?.username ?? ''} autocomplete="username" />
 		</div>
 		<div class="space-y-1.5">
-			<Label for="password">Password</Label>
+			<Label for="password" class="text-xs uppercase tracking-wider text-muted-foreground">
+				Password
+			</Label>
 			<Input id="password" name="password" type="password" required autocomplete="current-password" />
 		</div>
 		{#if form?.message}
 			<p class="text-sm text-destructive">{form.message}</p>
 		{/if}
-		<Button type="submit" class="w-full">Log in</Button>
+		<Button type="submit" class="w-full uppercase tracking-wider">Log in</Button>
 	</form>
 
 	<p class="text-sm text-muted-foreground text-center mt-4">
-		No account? <a href="/register" class="underline">Register</a>
+		No account? <a href="/register" class="text-primary hover:underline">Register</a>
 	</p>
 </div>

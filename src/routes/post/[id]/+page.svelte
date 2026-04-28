@@ -2,13 +2,14 @@
 	import { enhance } from '$app/forms';
 	import Button from '$lib/components/ui/button.svelte';
 	import Textarea from '$lib/components/ui/textarea.svelte';
-	import { ArrowBigDown, ArrowBigUp, Sparkles } from 'lucide-svelte';
-	import { hostname, timeAgo } from '$lib/utils';
+	import { ChevronUp, MessageSquare, RefreshCw, Send, Sparkles } from 'lucide-svelte';
+	import { hostname, tagsOf, timeAgo } from '$lib/utils';
 	import type { Comment } from '$lib/server/db';
 
 	let { data } = $props();
 	let summarizing = $state(false);
 	let summary = $derived(data.post.ai_summary);
+	const tags = $derived(tagsOf(data.post.tags));
 
 	async function generateSummary() {
 		summarizing = true;
@@ -44,12 +45,27 @@
 	});
 
 	let replyTo = $state<number | null>(null);
+
+	function avatarColor(name: string): string {
+		const colors = [
+			'bg-rose-500/20 text-rose-300',
+			'bg-amber-500/20 text-amber-300',
+			'bg-emerald-500/20 text-emerald-300',
+			'bg-sky-500/20 text-sky-300',
+			'bg-violet-500/20 text-violet-300',
+			'bg-fuchsia-500/20 text-fuchsia-300',
+			'bg-primary/20 text-primary'
+		];
+		let h = 0;
+		for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xffffffff;
+		return colors[Math.abs(h) % colors.length];
+	}
 </script>
 
-<div class="mx-auto max-w-3xl px-4 py-6">
+<div class="mx-auto max-w-3xl px-4 py-4 space-y-6">
 	<article class="rounded-lg border bg-card p-4">
 		<div class="flex gap-3">
-			<div class="flex flex-col items-center w-10 text-muted-foreground select-none">
+			<div class="flex flex-col items-center w-10 shrink-0 select-none">
 				<form method="POST" action="?/vote" use:enhance>
 					<input type="hidden" name="kind" value="post" />
 					<input type="hidden" name="id" value={data.post.id} />
@@ -60,48 +76,74 @@
 					/>
 					<button
 						type="submit"
-						class="p-1 rounded hover:bg-accent {data.post.user_vote === 1
+						class="p-1 rounded transition-colors {data.post.user_vote === 1
 							? 'text-primary'
-							: ''}"
+							: 'text-muted-foreground hover:text-primary'}"
 						aria-label="Upvote"
 					>
-						<ArrowBigUp class="h-5 w-5" />
+						<ChevronUp class="h-5 w-5" strokeWidth={2.4} />
 					</button>
 				</form>
-				<span class="text-sm font-semibold tabular-nums">{data.post.score}</span>
+				<span
+					class="mt-0.5 text-sm font-semibold tabular-nums {data.post.user_vote === 1
+						? 'text-primary'
+						: 'text-foreground'}"
+				>
+					{data.post.score}
+				</span>
 			</div>
+
 			<div class="flex-1 min-w-0">
-				<h1 class="text-xl font-semibold leading-tight">
+				<h1 class="text-2xl font-bold leading-tight">
 					{#if data.post.url}
 						<a
 							href={data.post.url}
 							target="_blank"
 							rel="noopener noreferrer"
-							class="hover:underline"
+							class="hover:text-primary transition-colors"
 						>
 							{data.post.title}
 						</a>
-						<span class="text-xs text-muted-foreground font-normal">
-							({hostname(data.post.url)})
-						</span>
 					{:else}
 						{data.post.title}
 					{/if}
 				</h1>
-				<div class="text-xs text-muted-foreground mt-1">
-					by <span class="text-foreground">{data.post.username}</span> ·
-					{timeAgo(data.post.created_at)}
+
+				{#if data.post.url}
+					<div class="text-xs text-muted-foreground mt-1 truncate">
+						<a href={data.post.url} target="_blank" rel="noopener noreferrer" class="hover:underline">
+							{hostname(data.post.url)}
+						</a>
+					</div>
+				{/if}
+
+				{#if tags.length > 0}
+					<div class="mt-3 flex flex-wrap gap-1.5">
+						{#each tags as tag}
+							<span class="inline-flex items-center rounded-md bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">
+								#{tag}
+							</span>
+						{/each}
+					</div>
+				{/if}
+
+				<div class="mt-2 text-xs text-muted-foreground">
+					by <span class="text-foreground/90">{data.post.username}</span>
+					· {timeAgo(data.post.created_at)}
+					· {data.post.comment_count} comment{data.post.comment_count === 1 ? '' : 's'}
 				</div>
+
 				{#if data.post.body}
-					<div class="prose prose-sm max-w-none mt-3 whitespace-pre-wrap">
+					<div class="prose prose-invert prose-sm max-w-none mt-4 whitespace-pre-wrap text-foreground/90">
 						{data.post.body}
 					</div>
 				{/if}
 
-				<div class="mt-4 rounded-md border bg-muted/40 p-3">
-					<div class="flex items-center justify-between gap-2 mb-1">
-						<div class="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-							<Sparkles class="h-3.5 w-3.5" /> AI summary
+				<section class="mt-5 rounded-md border border-primary/30 bg-primary/5 p-4">
+					<div class="flex items-center justify-between gap-2 mb-2">
+						<div class="flex items-center gap-2 text-sm font-semibold text-primary">
+							<Sparkles class="h-4 w-4" />
+							AI Generated Summary
 						</div>
 						<Button
 							type="button"
@@ -109,122 +151,158 @@
 							variant="ghost"
 							onclick={generateSummary}
 							disabled={summarizing}
+							class="text-primary hover:text-primary hover:bg-primary/10"
 						>
-							{summarizing ? 'Summarising…' : summary ? 'Regenerate' : 'Generate'}
+							<RefreshCw class="h-3.5 w-3.5 {summarizing ? 'animate-spin' : ''}" />
+							{summarizing ? 'Working…' : summary ? 'Regenerate' : 'Generate'}
 						</Button>
 					</div>
 					{#if summary}
-						<p class="text-sm">{summary}</p>
+						<p class="text-sm leading-relaxed text-foreground/90">{summary}</p>
 					{:else}
-						<p class="text-sm text-muted-foreground italic">
+						<p class="text-sm italic text-muted-foreground">
 							No summary yet. Click "Generate" to create one.
 						</p>
 					{/if}
-				</div>
+				</section>
 			</div>
 		</div>
 	</article>
 
-	<section class="mt-6">
-		<h2 class="text-lg font-semibold mb-3">
-			{data.post.comment_count} comment{data.post.comment_count === 1 ? '' : 's'}
-		</h2>
-
-		{#if data.user}
-			<form method="POST" action="?/comment" use:enhance class="mb-6 space-y-2">
-				<Textarea name="body" placeholder="Add to the discussion…" required />
-				<div class="flex justify-end">
-					<Button type="submit" size="sm">Post comment</Button>
-				</div>
-			</form>
-		{:else}
-			<p class="text-sm text-muted-foreground mb-6">
-				<a href="/login" class="underline">Log in</a> to join the discussion.
-			</p>
-		{/if}
+	<section>
+		<div class="flex items-center justify-between mb-4">
+			<h2 class="text-lg font-semibold flex items-center gap-2">
+				Discussions
+				<span class="text-muted-foreground font-normal">({data.post.comment_count})</span>
+			</h2>
+			<button
+				type="button"
+				class="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+			>
+				Sort by <span class="text-foreground">Top</span>
+			</button>
+		</div>
 
 		{#if tree.length === 0}
-			<p class="text-sm text-muted-foreground">No comments yet.</p>
+			<p class="text-sm text-muted-foreground py-4">No comments yet — start the discussion.</p>
 		{:else}
 			{#snippet renderComment(c: CommentNode, depth: number)}
-				<div class="border-l pl-3" style="margin-left: {depth * 12}px">
-					<div class="flex items-baseline gap-2 text-xs text-muted-foreground">
-						<span class="text-foreground font-medium">{c.username}</span>
-						<span>·</span>
-						<span class="tabular-nums">{c.score}</span>
-						<span>·</span>
-						<span>{timeAgo(c.created_at)}</span>
-					</div>
-					<p class="text-sm mt-1 whitespace-pre-wrap">{c.body}</p>
-					<div class="flex items-center gap-2 mt-1 text-xs">
-						<form method="POST" action="?/vote" use:enhance>
-							<input type="hidden" name="kind" value="comment" />
-							<input type="hidden" name="id" value={c.id} />
-							<input
-								type="hidden"
-								name="value"
-								value={c.user_vote === 1 ? 0 : 1}
-							/>
-							<button
-								type="submit"
-								class="text-muted-foreground hover:text-primary {c.user_vote === 1
-									? 'text-primary'
-									: ''}"
-								aria-label="Upvote comment"
-							>
-								<ArrowBigUp class="h-4 w-4 inline" /> upvote
-							</button>
-						</form>
-						{#if data.user}
-							<button
-								type="button"
-								class="text-muted-foreground hover:text-foreground"
-								onclick={() => (replyTo = replyTo === c.id ? null : c.id)}
-							>
-								reply
-							</button>
-						{/if}
-					</div>
-
-					{#if replyTo === c.id && data.user}
-						<form
-							method="POST"
-							action="?/comment"
-							use:enhance={() => {
-								return async ({ update }) => {
-									await update();
-									replyTo = null;
-								};
-							}}
-							class="mt-2 space-y-2"
-						>
-							<input type="hidden" name="parent_id" value={c.id} />
-							<Textarea name="body" placeholder="Reply…" required />
-							<div class="flex justify-end gap-2">
-								<Button
-									type="button"
-									size="sm"
-									variant="ghost"
-									onclick={() => (replyTo = null)}
-								>
-									Cancel
-								</Button>
-								<Button type="submit" size="sm">Reply</Button>
+				{@const isAuthor = c.user_id === data.post.user_id}
+				{@const username = c.username ?? 'anon'}
+				{@const initials = username.slice(0, 2).toUpperCase()}
+				<div class={depth > 0 ? 'mt-3 border-l border-border pl-4' : 'mt-3'}>
+					<div class="flex items-start gap-3">
+						<div class="h-8 w-8 rounded-full flex items-center justify-center text-[10px] font-semibold {avatarColor(username)} shrink-0">
+							{initials}
+						</div>
+						<div class="flex-1 min-w-0">
+							<div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+								<span class="font-semibold text-foreground">{username}</span>
+								{#if isAuthor}
+									<span class="inline-flex items-center rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary uppercase tracking-wider">
+										OP
+									</span>
+								{/if}
+								<span class="text-muted-foreground tabular-nums">· {c.score}</span>
+								<span class="text-muted-foreground">· {timeAgo(c.created_at)}</span>
 							</div>
-						</form>
-					{/if}
+							<p class="text-sm mt-1 whitespace-pre-wrap text-foreground/90">{c.body}</p>
+							<div class="mt-1.5 flex items-center gap-4 text-xs text-muted-foreground">
+								<form method="POST" action="?/vote" use:enhance>
+									<input type="hidden" name="kind" value="comment" />
+									<input type="hidden" name="id" value={c.id} />
+									<input
+										type="hidden"
+										name="value"
+										value={c.user_vote === 1 ? 0 : 1}
+									/>
+									<button
+										type="submit"
+										class="inline-flex items-center gap-1 hover:text-primary {c.user_vote === 1
+											? 'text-primary'
+											: ''}"
+										aria-label="Upvote comment"
+									>
+										<ChevronUp class="h-3.5 w-3.5" strokeWidth={2.4} />
+										Upvote
+									</button>
+								</form>
+								{#if data.user}
+									<button
+										type="button"
+										class="inline-flex items-center gap-1 hover:text-foreground"
+										onclick={() => (replyTo = replyTo === c.id ? null : c.id)}
+									>
+										<MessageSquare class="h-3 w-3" /> Reply
+									</button>
+								{/if}
+								<button
+									type="button"
+									class="hover:text-foreground"
+									aria-label="Report comment"
+								>
+									Report
+								</button>
+							</div>
 
-					{#each c.children as child (child.id)}
-						{@render renderComment(child, depth + 1)}
-					{/each}
+							{#if replyTo === c.id && data.user}
+								<form
+									method="POST"
+									action="?/comment"
+									use:enhance={() => {
+										return async ({ update }) => {
+											await update();
+											replyTo = null;
+										};
+									}}
+									class="mt-3 space-y-2"
+								>
+									<input type="hidden" name="parent_id" value={c.id} />
+									<Textarea name="body" placeholder="Write a reply…" required rows={3} />
+									<div class="flex justify-end gap-2">
+										<Button
+											type="button"
+											size="sm"
+											variant="ghost"
+											onclick={() => (replyTo = null)}
+										>
+											Cancel
+										</Button>
+										<Button type="submit" size="sm">
+											<Send class="h-3.5 w-3.5" /> Reply
+										</Button>
+									</div>
+								</form>
+							{/if}
+
+							{#each c.children as child (child.id)}
+								{@render renderComment(child, depth + 1)}
+							{/each}
+						</div>
+					</div>
 				</div>
 			{/snippet}
 
-			<div class="space-y-4">
+			<div>
 				{#each tree as root (root.id)}
 					{@render renderComment(root, 0)}
 				{/each}
 			</div>
+		{/if}
+
+		{#if data.user}
+			<form method="POST" action="?/comment" use:enhance class="mt-6 space-y-2 rounded-lg border bg-card p-3">
+				<Textarea name="body" placeholder="Add to the discussion…" required rows={3} />
+				<div class="flex justify-end">
+					<Button type="submit" size="sm" class="uppercase tracking-wider">
+						<Send class="h-3.5 w-3.5" /> Insert Reply
+					</Button>
+				</div>
+			</form>
+		{:else}
+			<p class="text-sm text-muted-foreground mt-4">
+				<a href="/login" class="text-primary hover:underline">Log in</a> to join the discussion.
+			</p>
 		{/if}
 	</section>
 </div>

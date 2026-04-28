@@ -5,8 +5,10 @@ import { listPosts, vote } from "$lib/server/posts";
 export const load: PageServerLoad = async ({ url, locals }) => {
   const sortParam = url.searchParams.get("sort");
   const sort = sortParam === "new" || sortParam === "top" ? sortParam : "hot";
-  const posts = listPosts({ sort, userId: locals.user?.id ?? 0, limit: 50 });
-  return { posts, sort };
+  const limitRaw = Number(url.searchParams.get("limit") ?? 50);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 && limitRaw <= 500 ? limitRaw : 50;
+  const posts = listPosts({ sort, userId: locals.user?.id ?? 0, limit });
+  return { posts, sort, limit };
 };
 
 export const actions: Actions = {

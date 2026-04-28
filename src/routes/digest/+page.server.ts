@@ -1,12 +1,13 @@
 import type { PageServerLoad } from "./$types";
-import { getDigest } from "$lib/server/posts";
+import { getDigest, getTrendingTags } from "$lib/server/posts";
 import { summarize } from "$lib/server/ai";
 
 export const load: PageServerLoad = async ({ url }) => {
-  const hours = Number(url.searchParams.get("hours") ?? "168"); // default last week
+  const hours = Number(url.searchParams.get("hours") ?? "24");
   const window =
-    Number.isFinite(hours) && hours > 0 && hours <= 24 * 30 ? hours : 168;
+    Number.isFinite(hours) && hours > 0 && hours <= 24 * 30 ? hours : 24;
   const posts = getDigest(window);
+  const trendingTags = getTrendingTags(window);
 
   let intro = "";
   if (posts.length > 0) {
@@ -15,11 +16,11 @@ export const load: PageServerLoad = async ({ url }) => {
       .map((p, i) => `${i + 1}. ${p.title}`)
       .join("\n");
     const r = await summarize({
-      title: `IPAI Flow digest — last ${window} hours`,
+      title: `IPAI Community digest — last ${window} hours`,
       body: `Top posts:\n${titles}`,
     });
     intro = r.summary;
   }
 
-  return { posts, hours: window, intro };
+  return { posts, hours: window, intro, trendingTags };
 };

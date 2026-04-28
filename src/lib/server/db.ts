@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS posts (
 	title TEXT NOT NULL,
 	url TEXT,
 	body TEXT,
+	tags TEXT,
 	created_at INTEGER NOT NULL,
 	score INTEGER NOT NULL DEFAULT 1,
 	comment_count INTEGER NOT NULL DEFAULT 0,
@@ -60,6 +61,14 @@ CREATE TABLE IF NOT EXISTS votes (
 );
 `);
 
+// Backwards-compat: add `tags` to existing databases that pre-date the column.
+const postCols = db.prepare("PRAGMA table_info(posts)").all() as {
+  name: string;
+}[];
+if (!postCols.some((c) => c.name === "tags")) {
+  db.exec("ALTER TABLE posts ADD COLUMN tags TEXT");
+}
+
 export type User = {
   id: number;
   username: string;
@@ -72,6 +81,7 @@ export type Post = {
   title: string;
   url: string | null;
   body: string | null;
+  tags: string | null;
   created_at: number;
   score: number;
   comment_count: number;

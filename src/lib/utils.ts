@@ -22,3 +22,11 @@ export function hostname(url: string | null | undefined): string | null {
     return null;
   }
 }
+
+export function tagsOf(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((t) => t.trim().replace(/^#/, ""))
+    .filter(Boolean);
+}
