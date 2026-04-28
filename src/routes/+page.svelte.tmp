@@ -1,0 +1,96 @@
+<script lang="ts">
+	import { enhance } from '$app/forms';
+	import Button from '$lib/components/ui/button.svelte';
+	import { ArrowBigUp, MessageSquare } from 'lucide-svelte';
+	import { hostname, timeAgo } from '$lib/utils';
+
+	let { data } = $props();
+</script>
+
+<div class="mx-auto max-w-4xl px-4 py-6">
+	<h1 class="text-2xl font-bold mb-1">Community feed</h1>
+	<p class="text-sm text-muted-foreground mb-6">
+		Sorted by <span class="font-medium text-foreground">{data.sort}</span>. Share links, ideas
+		and discussions with the IPAI community.
+	</p>
+
+	{#if data.posts.length === 0}
+		<div class="rounded-lg border bg-card p-10 text-center text-muted-foreground">
+			<p class="mb-4">No posts yet — be the first to share something.</p>
+			<Button href="/submit">Submit a post</Button>
+		</div>
+	{:else}
+		<ol class="space-y-3">
+			{#each data.posts as post, i (post.id)}
+				<li class="flex gap-3 rounded-lg border bg-card p-3 hover:border-primary/30 transition-colors">
+					<div class="flex flex-col items-center pt-0.5 text-muted-foreground select-none w-10">
+						<form method="POST" action="?/vote" use:enhance>
+							<input type="hidden" name="id" value={post.id} />
+							<input
+								type="hidden"
+								name="value"
+								value={post.user_vote === 1 ? 0 : 1}
+							/>
+							<button
+								type="submit"
+								class="p-1 rounded hover:bg-accent {post.user_vote === 1
+									? 'text-primary'
+									: ''}"
+								title="Upvote"
+								aria-label="Upvote"
+							>
+								<ArrowBigUp class="h-5 w-5" />
+							</button>
+						</form>
+						<span
+							class="text-sm font-semibold tabular-nums {post.user_vote === 1
+								? 'text-primary'
+								: 'text-foreground'}"
+						>
+							{post.score}
+						</span>
+					</div>
+
+					<div class="flex-1 min-w-0">
+						<div class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+							<span class="text-xs text-muted-foreground tabular-nums">{i + 1}.</span>
+							{#if post.url}
+								<a
+									href={post.url}
+									target="_blank"
+									rel="noopener noreferrer"
+									class="font-medium hover:underline truncate"
+								>
+									{post.title}
+								</a>
+								<span class="text-xs text-muted-foreground">
+									({hostname(post.url)})
+								</span>
+							{:else}
+								<a href="/post/{post.id}" class="font-medium hover:underline">
+									{post.title}
+								</a>
+							{/if}
+						</div>
+						{#if post.ai_summary}
+							<p class="text-sm text-muted-foreground mt-1 line-clamp-2">
+								{post.ai_summary}
+							</p>
+						{/if}
+						<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground mt-1.5">
+							<span>by <span class="text-foreground">{post.username}</span></span>
+							<span>{timeAgo(post.created_at)}</span>
+							<a
+								href="/post/{post.id}"
+								class="inline-flex items-center gap-1 hover:text-foreground"
+							>
+								<MessageSquare class="h-3 w-3" />
+								{post.comment_count} comment{post.comment_count === 1 ? '' : 's'}
+							</a>
+						</div>
+					</div>
+				</li>
+			{/each}
+		</ol>
+	{/if}
+</div>

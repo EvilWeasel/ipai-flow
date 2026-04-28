@@ -1,29 +1,84 @@
-Challenge 4: "IPAI Flow": A Hacker News-style community discussion platform
+# IPAI Flow
 
-Current situation
+A lightweight, Hacker News–style community discussion platform built for the IPAI community.
 
-The IPAI community is already actively engaging with one another through various formats and channels. This constantly generates exciting content, ideas and discussions.
+> Challenge 4 — a clear, shared, asynchronous space where content can be shared, prioritised and discussed. Stripped down to the essentials.
 
-IPAI Flow builds on this and complements this dynamic with a shared, asynchronous space that makes discussions visible and keeps them going.
+## Stack
 
-The task
+- **SvelteKit** (Svelte 5, runes) + **TypeScript**
+- **Tailwind CSS v4** with shadcn-style design tokens
+- **shadcn-svelte**–style components (Button, Input, Textarea, Label, Card, Badge) implemented locally with `tailwind-variants` + `bits-ui`
+- **better-sqlite3** for a single-file, self-hosted database (no external services needed)
+- **bcryptjs** + cookie sessions for auth
+- **`@sveltejs/adapter-node`** for self-hosting
+- Optional **OpenAI-compatible** endpoint for summaries / moderation (works fully offline without it)
 
-Develop a lightweight discussion forum, inspired by Hacker News and tailored to the IPAI community.
+## Features
 
-At its core, it is a place where content can be shared, prioritised and discussed. Simple, fast and without unnecessary complexity.
+- Submit link or text posts
+- Threaded comments
+- Upvoting with HN-style "hot" ranking + `new` and `top` views
+- User accounts with karma (no email required → GDPR-friendly)
+- AI-assisted summaries on each post (regenerable)
+- AI-assisted moderation on submissions and comments
+- Automated **digest** view that bundles the top posts of the last *N* hours with an AI overview
+- 100% self-hosted, single SQLite file
 
-Exactly how you implement this, which areas you focus on and which features you prioritise is deliberately left open.
+## Getting started
 
-Framework
+```bash
+npm install
+cp .env.example .env   # edit if you want to enable AI
+npm run dev
+```
 
-The solution should be self-hosted and GDPR-compliant, and have a technical foundation that allows for extensions.
+Open http://localhost:5173.
 
-An AI element is part of the concept. How extensively and in what form it is used is up to you. Possible applications include support with moderation, summaries or structuring content.
+### Environment
 
-Optional
+| Variable | Purpose |
+|---|---|
+| `OPENAI_API_KEY` | Enable AI summary + moderation. Leave blank for offline fallback. |
+| `OPENAI_MODEL` | Model name (default `gpt-4o-mini`). |
+| `OPENAI_BASE_URL` | OpenAI-compatible endpoint (defaults to OpenAI; works with self-hosted Ollama, vLLM, etc.). |
+| `DATABASE_FILE` | SQLite file path (default `data/ipai-flow.db`). |
 
-Additionally, a mechanism could be developed that regularly bundles relevant content and presents it to the community, for example in the form of an automated digest.
+### Production
 
-Vision
+```bash
+npm run build
+node build
+```
 
-A clear, shared space for discussions within the IPAI community. Stripped down to the essentials and open to your own ideas.
+The Node adapter produces a portable server in `build/`. Place behind any reverse proxy.
+
+## Project structure
+
+```
+src/
+  hooks.server.ts            # session cookie → locals.user
+  lib/
+    components/ui/           # shadcn-style UI primitives
+    server/
+      db.ts                  # SQLite + schema
+      auth.ts                # password hashing + sessions
+      posts.ts               # data access (posts, comments, votes)
+      ai.ts                  # summarise + moderate (with offline fallback)
+    utils.ts
+  routes/
+    +layout.svelte           # top nav, theme
+    +page.svelte             # feed (hot/new/top)
+    submit/                  # new post
+    post/[id]/               # detail + comments
+    digest/                  # automated community digest
+    login/  register/  logout/
+    api/ai/summarize/        # POST → regenerate summary
+```
+
+## GDPR & self-hosting notes
+
+- Single SQLite file in `data/` — easy to back up, delete, or move.
+- No third-party trackers, no external CDNs at runtime.
+- AI calls are **opt-in**. Without an API key the app uses a deterministic local extractive summary and heuristic moderation.
+- Accounts only require a username + password — no email, no PII collected.

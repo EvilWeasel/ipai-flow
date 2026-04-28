@@ -1,0 +1,50 @@
+import type { PageServerLoad, Actions } from "./$types";
+import { fail, redirect } from "@sveltejs/kit";
+import { db, now } from "$lib/server/db";
+import {
+  createSession,
+  hashPassword,
+  isValidUsername,
+  setSessionCookie,
+} from "$lib/server/auth";
+
+export const load: PageServerLoad = async ({ locals }) => {
+  if (locals.user) throw redirect(303, "/");
+  return {};
+};
+
+export const actions: Actions = {
+  default: async ({ request, cookies }) => {
+    const form = await request.formData();
+    const username = String(form.get("username") ?? "").trim();
+    const password = String(form.get("password") ?? "");
+    if (!isValidUsername(username)) {
+      return fail(400, {
+        message: "username must be 3–32 chars: letters, numbers, _ or -",
+        username,
+      });
+    }
+    if (password.length < 8 || password.length > 200) {
+      return fail(400, {
+        message: "password must be at least 8 characters",
+        username,
+      });
+    }
+    const existing = db
+      .prepare("SELECT id FROM users WHERE username = ?")
+      .get(username);
+    if (existing) {
+      return fail(400, { message: "username already taken", username });
+    }
+    const hash = await hashPassword(password);
+    const result = db
+      .prepare(
+        "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+      )
+      .run(username, hash, now());
+    const userId = Number(result.lastInsertRowid);
+    const sid = createSession(userId);
+    setSessionCookie(cookies, sid);
+    throw redirect(303, "/");
+  },
+};
