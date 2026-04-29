@@ -371,7 +371,7 @@ function fallbackSummary(input: {
   const body = cleanText(input.body ?? "");
   const urlContext = cleanText(input.urlContext ?? "");
   const host = hostname(input.url);
-  const contextText = body || urlContext;
+  const contextText = urlContext || body;
   const firstSentence = contextText.match(/[^.!?]+[.!?]+/)?.[0] ?? contextText;
 
   if (firstSentence) {
@@ -410,9 +410,11 @@ function summaryInput(input: {
   urlContext?: string | null;
 }): { prompt: string } {
   return {
-    prompt: `Title: ${input.title}\n\n${input.body ?? "(link post)"}${
-      input.url ? `\nURL: ${input.url}` : ""
-    }${input.urlContext ? `\n\nFetched URL context:\n${input.urlContext}` : ""}`,
+    prompt: `Title: ${input.title}\nURL: ${input.url ?? "(no URL)"}\nSubmitter description: ${
+      input.body || "(none)"
+    }\n\nLinked article context, highest priority:\n${
+      input.urlContext || "(the linked page could not be fetched)"
+    }`,
   };
 }
 
@@ -437,7 +439,7 @@ export function streamSummary(input: {
   const { prompt } = summaryInput(input);
   const fallback = fallbackSummary(input);
   const ai = streamAIText(
-    "You summarise community forum posts for the IPAI Flow platform. Write 2-3 concise sentences in neutral, factual English. No emojis, no marketing language.",
+    "You summarise links for the IPAI Flow platform. Prioritize the fetched linked article context over the post title and submitter description. Use the title and description only to frame or disambiguate the link. Write 2-3 concise, neutral sentences that help a reader decide whether opening the link is worthwhile. If the linked article context is unavailable, say what can be inferred from the title and description without pretending to have read the article. No emojis, no marketing language.",
     prompt,
     200,
     "summary",
