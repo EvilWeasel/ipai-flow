@@ -20,6 +20,7 @@
 	let summarizing = $state(false);
 	let initialSummary = $derived(data.post.ai_summary ?? '');
 	let summary = $state('');
+	let visibleSummary = $derived(summary || initialSummary);
 	let summaryError = $state('');
 	const tags = $derived(tagsOf(data.post.tags));
 	let commentSort = $state<'top' | 'new'>('top');
@@ -261,11 +262,11 @@
 							class="text-primary hover:text-primary hover:bg-primary/10"
 						>
 							<RefreshCw class="h-3.5 w-3.5 {summarizing ? 'animate-spin' : ''}" />
-							{summarizing ? 'Working…' : summary ? 'Regenerate' : 'Generate'}
+							{summarizing ? 'Working…' : visibleSummary ? 'Regenerate' : 'Generate'}
 						</Button>
 					</div>
-					{#if summary}
-						<p class="text-sm leading-relaxed text-foreground/90">{summary}</p>
+					{#if visibleSummary}
+						<p class="text-sm leading-relaxed text-foreground/90">{visibleSummary}</p>
 					{:else if summaryError}
 						<p class="text-sm text-destructive">{summaryError}</p>
 					{:else}

@@ -46,6 +46,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           controller.enqueue(encoder.encode(fallback));
         }
       } finally {
+        if (!summary.trim() && fallback) {
+          summary = fallback;
+          controller.enqueue(encoder.encode(fallback));
+        }
         const savedSummary = summary.trim();
         if (savedSummary) {
           await setAiSummary(postId, savedSummary).catch(() => undefined);

@@ -1,6 +1,4 @@
-import { createOpenAI } from "@ai-sdk/openai";
 import { env } from "$env/dynamic/private";
-import { streamText } from "ai";
 
 export type ModerationStatus = "approved" | "pending" | "blocked";
 
@@ -27,6 +25,7 @@ function providerConfig() {
     key,
     model,
     baseURL: normalizeOpenAIBaseURL(rawBaseURL),
+    endpoint: `${normalizeOpenAIBaseURL(rawBaseURL) ?? "https://api.openai.com/v1"}/chat/completions`,
     provider: usesPgx ? "pgx" : "openai",
   };
 }
@@ -40,10 +39,166 @@ function normalizeOpenAIBaseURL(rawBaseURL?: string) {
 }
 
 function logAIDecision(
-  event: "provider" | "fallback",
+  event: "provider" | "provider-error" | "provider-complete" | "fallback",
   details: Record<string, string | number | boolean | undefined>,
 ) {
   console.info("[ai]", event, details);
+}
+
+function providerHeaders(config: NonNullable<ReturnType<typeof providerConfig>>) {
+  return {
+    authorization: `Bearer ${config.key}`,
+    "content-type": "application/json",
+  };
+}
+
+function providerMessages(system: string, user: string) {
+  return [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ];
+}
+
+async function* streamOpenAICompatibleText(config: NonNullable<ReturnType<typeof providerConfig>>, input: {
+  system: string;
+  user: string;
+  max: number;
+  purpose: string;
+}): AsyncIterable<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
+  let chunks = 0;
+
+  try {
+    const response = await fetch(config.endpoint, {
+      method: "POST",
+      signal: controller.signal,
+      headers: providerHeaders(config),
+      body: JSON.stringify({
+        model: config.model,
+        messages: providerMessages(input.system, input.user),
+        temperature: 0.3,
+        max_tokens: input.max,
+        stream: true,
+      }),
+    });
+
+    if (!response.ok) {
+      const message = await response.text().catch(() => "");
+      throw new Error(`provider-http-${response.status}${message ? `: ${message.slice(0, 240)}` : ""}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("provider-empty-body");
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data:")) continue;
+        const data = trimmed.slice(5).trim();
+        if (data === "[DONE]") {
+          logAIDecision("provider-complete", {
+            purpose: input.purpose,
+            provider: config.provider,
+            chunks,
+          });
+          return;
+        }
+        try {
+          const parsed = JSON.parse(data) as {
+            choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>;
+          };
+          const text = parsed.choices?.[0]?.delta?.content ?? parsed.choices?.[0]?.message?.content ?? "";
+          if (text) {
+            chunks += 1;
+            yield text;
+          }
+        } catch (err) {
+          throw new Error(`provider-stream-parse-failed: ${err instanceof Error ? err.message : "invalid-json"}`);
+        }
+      }
+    }
+
+    logAIDecision("provider-complete", {
+      purpose: input.purpose,
+      provider: config.provider,
+      chunks,
+    });
+  } catch (err) {
+    logAIDecision("provider-error", {
+      purpose: input.purpose,
+      provider: config.provider,
+      reason: err instanceof Error ? err.message : "provider-stream-failed",
+    });
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function completeAIText(system: string, user: string, max = 300, purpose = "completion") {
+  const config = providerConfig();
+  if (!config) {
+    logAIDecision("fallback", { purpose, reason: "no-provider-config" });
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
+  try {
+    logAIDecision("provider", {
+      purpose,
+      provider: config.provider,
+      model: config.model,
+      baseURL: config.baseURL ? "custom" : "default",
+    });
+    const response = await fetch(config.endpoint, {
+      method: "POST",
+      signal: controller.signal,
+      headers: providerHeaders(config),
+      body: JSON.stringify({
+        model: config.model,
+        messages: providerMessages(system, user),
+        temperature: 0.1,
+        max_tokens: max,
+        stream: false,
+      }),
+    });
+
+    if (!response.ok) {
+      const message = await response.text().catch(() => "");
+      throw new Error(`provider-http-${response.status}${message ? `: ${message.slice(0, 240)}` : ""}`);
+    }
+
+    const parsed = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: { completion_tokens?: number };
+    };
+    const text = parsed.choices?.[0]?.message?.content?.trim() ?? "";
+    logAIDecision("provider-complete", {
+      purpose,
+      provider: config.provider,
+      chunks: text ? 1 : 0,
+    });
+    return text || null;
+  } catch (err) {
+    logAIDecision("provider-error", {
+      purpose,
+      provider: config.provider,
+      reason: err instanceof Error ? err.message : "provider-request-failed",
+    });
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function streamAIText(system: string, user: string, max = 300, purpose = "completion") {
@@ -59,22 +214,7 @@ function streamAIText(system: string, user: string, max = 300, purpose = "comple
       model: config.model,
       baseURL: config.baseURL ? "custom" : "default",
     });
-    const openai = createOpenAI({
-      apiKey: config.key,
-      ...(config.baseURL ? { baseURL: config.baseURL } : {}),
-    });
-    return streamText({
-      model: openai.chat(config.model),
-      system,
-      prompt: user,
-      temperature: 0.3,
-      maxOutputTokens: max,
-      maxRetries: 1,
-      timeout: {
-        totalMs: 4_000,
-        chunkMs: 2_000,
-      },
-    });
+    return { textStream: streamOpenAICompatibleText(config, { system, user, max, purpose }) };
   } catch (err) {
     logAIDecision("fallback", {
       purpose,
@@ -342,14 +482,22 @@ export async function moderate(text: string): Promise<ModerationVerdict> {
     return { ok: false, status: "blocked", reason: localBlock, source: "local" };
   }
 
-  const ai = streamAIText(
+  const hasProvider = Boolean(providerConfig());
+  const moderation = await completeAIText(
     'You moderate forum posts and comments for a professional community. Reply with exactly one of: "APPROVED", "PENDING: <short reason>", or "BLOCKED: <short reason>". Block harassment, hate speech, illegal content, exploit payloads, and spam. Use pending only when the content needs human review but is not clearly blockable.',
     text.slice(0, 4000),
     60,
     "moderation",
   );
-  const moderation = ai ? await readTextStream(ai.textStream) : null;
   if (!moderation) {
+    if (hasProvider) {
+      return {
+        ok: true,
+        status: "pending",
+        reason: "AI moderation unavailable",
+        source: "fallback",
+      };
+    }
     return { ok: true, status: "approved", source: "fallback" };
   }
 
