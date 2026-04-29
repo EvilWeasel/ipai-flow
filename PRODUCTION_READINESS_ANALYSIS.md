@@ -194,14 +194,14 @@ Make the local version feel coherent, fast, credible, and demo-safe. Do not try 
 - [x] Run locally with Supabase reachable from the demo machine. Decision: keep as operating assumption; no code change needed.
 - [x] Use PGX/tailnet only if stable; otherwise rely on fallback/precomputed summaries. Decision: implement faster deterministic fallback behavior and avoid pitch dependence on live AI.
 - [x] Avoid Vercel deployment until AI/provider story is fixed. Decision: deferred for tonight; local demo is the production-readiness target.
-- [x] Seed or provide a controlled demo dataset instead of relying on ad hoc existing rows. Implemented `supabase/demo_seed.sql`; it resets a disposable demo DB and inserts credible IPAI Flow users, posts, comments, votes, tags, and precomputed summaries. Note: the configured Supabase instance still needs this seed applied before the pitch.
+- [x] Seed or provide a controlled demo dataset instead of relying on ad hoc existing rows. Implemented `supabase/demo_seed.sql`; it resets a disposable demo DB and inserts credible IPAI Flow users, posts, comments, votes, tags, and precomputed summaries. Applied the controlled dataset to the configured test Supabase project on 2026-04-29.
 
 ### Wave 1: Hard Demo Breakers
 
 - [x] Fix author mapping for Supabase object and array relation shapes across feed, detail, digest, and account surfaces. Implemented tolerant relation mapping with a nonblank member fallback; verified no blank author markup over loaded feed/digest/post HTML.
 - [x] Remove or implement inert visible controls: header Search, digest Filter, discussion Sort, and Report comment. Header Search and Report were removed; digest Filter became working 24h/7d/30d links; discussion Sort became a Top/New segmented control.
 - [x] Make digest fast by removing blocking AI generation from SSR and using a deterministic high-quality intro. Implemented deterministic digest signal text; HTTP verification showed `/digest` loading under 1 second locally.
-- [x] Clean demo data with credible IPAI users, posts, tags, comments, and precomputed summaries. Implemented resettable Supabase demo seed; it must be applied to the demo database to replace existing ad hoc rows.
+- [x] Clean demo data with credible IPAI users, posts, tags, comments, and precomputed summaries. Implemented resettable Supabase demo seed and applied it to the configured test Supabase project, replacing existing ad hoc rows.
 
 ### Wave 2: UX Credibility
 
