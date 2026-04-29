@@ -1,11 +1,12 @@
 import type { PageServerLoad, Actions } from "./$types";
 import { fail, redirect } from "@sveltejs/kit";
-import { db, now } from "$lib/server/db";
 import {
+  createUser,
   createSession,
   hashPassword,
   isValidUsername,
   setSessionCookie,
+  usernameExists,
 } from "$lib/server/auth";
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -30,20 +31,13 @@ export const actions: Actions = {
         username,
       });
     }
-    const existing = db
-      .prepare("SELECT id FROM users WHERE username = ?")
-      .get(username);
+    const existing = await usernameExists(username);
     if (existing) {
       return fail(400, { message: "username already taken", username });
     }
     const hash = await hashPassword(password);
-    const result = db
-      .prepare(
-        "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
-      )
-      .run(username, hash, now());
-    const userId = Number(result.lastInsertRowid);
-    const sid = createSession(userId);
+    const userId = await createUser({ username, password_hash: hash });
+    const sid = await createSession(userId);
     setSessionCookie(cookies, sid);
     throw redirect(303, "/");
   },

@@ -66,18 +66,29 @@ export const actions: Actions = {
       });
     }
 
-    const id = createPost({
-      userId: locals.user.id,
-      title,
-      url,
-      body: body || null,
-      tags: normalizeTagsInput(tagsRaw),
-    });
+    let id;
+    try {
+      id = await createPost({
+        userId: locals.user.id,
+        title,
+        url,
+        body: body || null,
+        tags: normalizeTagsInput(tagsRaw),
+      });
+    } catch {
+      return fail(503, {
+        message: "submission unavailable because the database is not reachable",
+        title,
+        urlRaw,
+        body,
+        tagsRaw,
+      });
+    }
 
     // Best-effort background-ish summary; don't block on failure.
     try {
       const { summary } = await summarize({ title, body, url });
-      if (summary) setAiSummary(id, summary);
+      if (summary) await setAiSummary(id, summary);
     } catch {
       /* ignore */
     }

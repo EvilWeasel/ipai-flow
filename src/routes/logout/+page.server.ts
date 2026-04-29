@@ -9,7 +9,7 @@ import {
 export const actions: Actions = {
   default: async ({ cookies }) => {
     const sid = getSessionCookie(cookies);
-    if (sid) deleteSession(sid);
+    if (sid) await deleteSession(sid);
     clearSessionCookie(cookies);
     throw redirect(303, "/");
   },

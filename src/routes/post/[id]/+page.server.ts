@@ -6,9 +6,15 @@ import { moderate } from "$lib/server/ai";
 export const load: PageServerLoad = async ({ params, locals }) => {
   const id = Number(params.id);
   if (!Number.isFinite(id)) throw error(400, "invalid id");
-  const post = getPost(id, locals.user?.id ?? 0);
+  let post;
+  let comments;
+  try {
+    post = await getPost(id, locals.user?.id ?? 0);
+    comments = post ? await getComments(id, locals.user?.id ?? 0) : [];
+  } catch {
+    throw error(503, "database unavailable");
+  }
   if (!post) throw error(404, "not found");
-  const comments = getComments(id, locals.user?.id ?? 0);
   return { post, comments };
 };
 
@@ -29,7 +35,11 @@ export const actions: Actions = {
         message: `blocked by moderation: ${mod.reason ?? "unsafe"}`,
       });
     }
-    createComment({ userId: locals.user.id, postId: id, parentId, body });
+    try {
+      await createComment({ userId: locals.user.id, postId: id, parentId, body });
+    } catch {
+      return fail(503, { message: "comment unavailable right now" });
+    }
     return { ok: true };
   },
   vote: async ({ request, locals }) => {
@@ -44,12 +54,16 @@ export const actions: Actions = {
     ) {
       return fail(400, { message: "invalid vote" });
     }
-    vote({
-      userId: locals.user.id,
-      kind,
-      targetId,
-      value: value as 1 | -1 | 0,
-    });
+    try {
+      await vote({
+        userId: locals.user.id,
+        kind,
+        targetId,
+        value: value as 1 | -1 | 0,
+      });
+    } catch {
+      return fail(503, { message: "vote unavailable right now" });
+    }
     return { ok: true };
   },
 };

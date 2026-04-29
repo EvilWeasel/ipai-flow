@@ -1,41 +1,54 @@
-/**
- * Lightweight AI helper. If OPENAI_API_KEY is set, calls OpenAI's
- * chat completions API. Otherwise falls back to a deterministic
- * extractive summary so the app still works fully offline / GDPR-only.
- */
+import { createOpenAI } from "@ai-sdk/openai";
+import { env } from "$env/dynamic/private";
+import { streamText } from "ai";
 
-const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
-const BASE_URL = process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1";
-
-async function callOpenAI(
-  system: string,
-  user: string,
-  max = 300,
-): Promise<string | null> {
-  const key = process.env.OPENAI_API_KEY;
+function providerConfig() {
+  const key = env.PGX_API_KEY ?? env.OPENAI_API_KEY;
   if (!key) return null;
+
+  const usesPgx = Boolean(env.PGX_API_KEY);
+  const rawBaseURL =
+    env.PGX_URL_BASE ??
+    env.OPENAI_BASE_URL ??
+    (usesPgx ? "https://pgxapi.siller.io/v1/chat/completions" : undefined);
+  const model =
+    env.PGX_MODEL ?? env.OPENAI_MODEL ?? (usesPgx ? "gemma-4-26b" : "gpt-4o-mini");
+
+  return {
+    key,
+    model,
+    baseURL: normalizeOpenAIBaseURL(rawBaseURL),
+  };
+}
+
+function normalizeOpenAIBaseURL(rawBaseURL?: string) {
+  if (!rawBaseURL) return undefined;
+  return rawBaseURL
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\/chat\/completions$/, "");
+}
+
+function streamAIText(system: string, user: string, max = 300) {
+  const config = providerConfig();
+  if (!config) return null;
   try {
-    const res = await fetch(`${BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        temperature: 0.3,
-        max_tokens: max,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      }),
+    const openai = createOpenAI({
+      apiKey: config.key,
+      ...(config.baseURL ? { baseURL: config.baseURL } : {}),
     });
-    if (!res.ok) return null;
-    const data = (await res.json()) as {
-      choices?: { message?: { content?: string } }[];
-    };
-    return data.choices?.[0]?.message?.content?.trim() ?? null;
+    return streamText({
+      model: openai.chat(config.model),
+      system,
+      prompt: user,
+      temperature: 0.3,
+      maxOutputTokens: max,
+      maxRetries: 1,
+      timeout: {
+        totalMs: 20_000,
+        chunkMs: 10_000,
+      },
+    });
   } catch {
     return null;
   }
@@ -48,21 +61,76 @@ function fallbackSummary(text: string, maxSentences = 3): string {
   return sentences.slice(0, maxSentences).join(" ").trim();
 }
 
+async function readTextStream(
+  textStream: AsyncIterable<string>,
+): Promise<string | null> {
+  try {
+    let text = "";
+    for await (const chunk of textStream) text += chunk;
+    return text.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function* fallbackTextStream(text: string): AsyncIterable<string> {
+  if (text) yield text;
+}
+
+function summaryInput(input: {
+  title: string;
+  body?: string | null;
+  url?: string | null;
+}): { sourceText: string; prompt: string } {
+  return {
+    sourceText: [input.title, input.body, input.url].filter(Boolean).join("\n\n"),
+    prompt: `Title: ${input.title}\n\n${input.body ?? "(link post)"}${
+      input.url ? `\nURL: ${input.url}` : ""
+    }`,
+  };
+}
+
+export function streamSummary(input: {
+  title: string;
+  body?: string | null;
+  url?: string | null;
+}): {
+  textStream: AsyncIterable<string>;
+  fallback: string;
+  source: "ai" | "fallback";
+} {
+  const { sourceText, prompt } = summaryInput(input);
+  const fallback = fallbackSummary(sourceText);
+  const ai = streamAIText(
+    "You summarise community forum posts for the IPAI Flow platform. Write 2-3 concise sentences in neutral, factual English. No emojis, no marketing language.",
+    prompt,
+    200,
+  );
+
+  if (!ai) {
+    return {
+      textStream: fallbackTextStream(fallback),
+      fallback,
+      source: "fallback",
+    };
+  }
+
+  return {
+    textStream: ai.textStream,
+    fallback,
+    source: "ai",
+  };
+}
+
 export async function summarize(input: {
   title: string;
   body?: string | null;
   url?: string | null;
 }): Promise<{ summary: string; source: "ai" | "fallback" }> {
-  const sourceText = [input.title, input.body, input.url]
-    .filter(Boolean)
-    .join("\n\n");
-  const ai = await callOpenAI(
-    "You summarise community forum posts for the IPAI Flow platform. Write 2-3 concise sentences in neutral, factual English. No emojis, no marketing language.",
-    `Title: ${input.title}\n\n${input.body ?? "(link post)"}${input.url ? `\nURL: ${input.url}` : ""}`,
-    200,
-  );
-  if (ai) return { summary: ai, source: "ai" };
-  return { summary: fallbackSummary(sourceText), source: "fallback" };
+  const streamed = streamSummary(input);
+  const summary = await readTextStream(streamed.textStream);
+  if (summary) return { summary, source: streamed.source };
+  return { summary: streamed.fallback, source: "fallback" };
 }
 
 export async function moderate(
@@ -75,15 +143,16 @@ export async function moderate(
     if (lower.includes(term)) return { ok: false, reason: "unsafe content" };
   }
   if (text.length > 20_000) return { ok: false, reason: "too long" };
-  const ai = await callOpenAI(
+  const ai = streamAIText(
     'You moderate forum posts. Reply with exactly "OK" if the content is acceptable for a professional community, or "BLOCK: <short reason>" if it contains harassment, hate speech, illegal content, or spam.',
     text.slice(0, 4000),
     60,
   );
-  if (ai && ai.toUpperCase().startsWith("BLOCK")) {
+  const moderation = ai ? await readTextStream(ai.textStream) : null;
+  if (moderation && moderation.toUpperCase().startsWith("BLOCK")) {
     return {
       ok: false,
-      reason: ai.replace(/^BLOCK:?\s*/i, "").trim() || "blocked",
+      reason: moderation.replace(/^BLOCK:?\s*/i, "").trim() || "blocked",
     };
   }
   return { ok: true };

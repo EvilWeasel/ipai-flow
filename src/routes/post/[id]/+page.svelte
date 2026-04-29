@@ -8,21 +8,47 @@
 
 	let { data } = $props();
 	let summarizing = $state(false);
-	let summary = $derived(data.post.ai_summary);
+	let initialSummary = $derived(data.post.ai_summary ?? '');
+	let summary = $state('');
+	let summaryError = $state('');
 	const tags = $derived(tagsOf(data.post.tags));
+
+	$effect(() => {
+		summary = initialSummary;
+	});
 
 	async function generateSummary() {
 		summarizing = true;
+		summaryError = '';
 		try {
 			const res = await fetch('/api/ai/summarize', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ postId: data.post.id })
 			});
-			if (res.ok) {
-				const j = await res.json();
-				summary = j.summary;
+			if (!res.ok) {
+				summaryError = (await res.text()) || 'Summary unavailable right now.';
+				return;
 			}
+
+			const reader = res.body?.getReader();
+			if (!reader) {
+				summaryError = 'Summary unavailable right now.';
+				return;
+			}
+
+			const decoder = new TextDecoder();
+			summary = '';
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				summary += decoder.decode(value, { stream: true });
+			}
+			summary += decoder.decode();
+			summary = summary.trim();
+			if (!summary) summaryError = 'Summary unavailable right now.';
+		} catch {
+			summaryError = 'Summary unavailable right now.';
 		} finally {
 			summarizing = false;
 		}
@@ -159,6 +185,8 @@
 					</div>
 					{#if summary}
 						<p class="text-sm leading-relaxed text-foreground/90">{summary}</p>
+					{:else if summaryError}
+						<p class="text-sm text-destructive">{summaryError}</p>
 					{:else}
 						<p class="text-sm italic text-muted-foreground">
 							No summary yet. Click "Generate" to create one.

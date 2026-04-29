@@ -34,7 +34,11 @@
 </div>
 
 <div class="mx-auto max-w-3xl px-4 pb-6">
-	{#if data.posts.length === 0}
+	{#if data.dbError}
+		<div class="rounded-lg border bg-card p-10 text-center">
+			<p class="text-destructive">{data.dbError}</p>
+		</div>
+	{:else if data.posts.length === 0}
 		<div class="rounded-lg border bg-card p-10 text-center">
 			<p class="text-muted-foreground mb-4">No posts yet — be the first to share something.</p>
 			<Button href="/submit">Submit a post</Button>

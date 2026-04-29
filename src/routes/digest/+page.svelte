@@ -57,7 +57,9 @@
 			</button>
 		</div>
 
-		{#if data.posts.length === 0}
+		{#if data.dbError}
+			<p class="text-destructive text-sm">{data.dbError}</p>
+		{:else if data.posts.length === 0}
 			<p class="text-muted-foreground text-sm">No posts in this window yet.</p>
 		{:else}
 			<ol class="space-y-3">

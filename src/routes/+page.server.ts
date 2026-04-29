@@ -1,5 +1,5 @@
 import type { PageServerLoad, Actions } from "./$types";
-import { error, fail, redirect } from "@sveltejs/kit";
+import { fail, redirect } from "@sveltejs/kit";
 import { listPosts, vote } from "$lib/server/posts";
 
 export const load: PageServerLoad = async ({ url, locals }) => {
@@ -7,8 +7,17 @@ export const load: PageServerLoad = async ({ url, locals }) => {
   const sort = sortParam === "new" || sortParam === "top" ? sortParam : "hot";
   const limitRaw = Number(url.searchParams.get("limit") ?? 50);
   const limit = Number.isFinite(limitRaw) && limitRaw > 0 && limitRaw <= 500 ? limitRaw : 50;
-  const posts = listPosts({ sort, userId: locals.user?.id ?? 0, limit });
-  return { posts, sort, limit };
+  try {
+    const posts = await listPosts({ sort, userId: locals.user?.id ?? 0, limit });
+    return { posts, sort, limit, dbError: "" };
+  } catch {
+    return {
+      posts: [],
+      sort,
+      limit,
+      dbError: "Posts are unavailable because the database is not reachable.",
+    };
+  }
 };
 
 export const actions: Actions = {
@@ -20,12 +29,16 @@ export const actions: Actions = {
     if (!Number.isFinite(id) || ![1, -1, 0].includes(value)) {
       return fail(400, { message: "invalid vote" });
     }
-    vote({
-      userId: locals.user.id,
-      kind: "post",
-      targetId: id,
-      value: value as 1 | -1 | 0,
-    });
+    try {
+      await vote({
+        userId: locals.user.id,
+        kind: "post",
+        targetId: id,
+        value: value as 1 | -1 | 0,
+      });
+    } catch {
+      return fail(503, { message: "vote unavailable right now" });
+    }
     return { ok: true };
   },
 };

@@ -1,20 +1,92 @@
-import { db, now, rankScore, type Comment, type Post } from "./db";
+import { now, rankScore, supabase, type Comment, type Post } from "./db";
 
-export function listPosts(
+type PostRow = {
+  id: number;
+  user_id: number;
+  title: string;
+  url: string | null;
+  body: string | null;
+  tags: string | null;
+  created_at: number;
+  score: number;
+  comment_count: number;
+  ai_summary: string | null;
+  flagged: number;
+  users?: { username: string }[] | null;
+};
+
+type CommentRow = {
+  id: number;
+  post_id: number;
+  user_id: number;
+  parent_id: number | null;
+  body: string;
+  created_at: number;
+  score: number;
+  users?: { username: string }[] | null;
+};
+
+function mapPost(row: PostRow, userVote?: number | null): Post {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    title: row.title,
+    url: row.url,
+    body: row.body,
+    tags: row.tags,
+    created_at: row.created_at,
+    score: row.score,
+    comment_count: row.comment_count,
+    ai_summary: row.ai_summary,
+    flagged: row.flagged,
+    username: row.users?.[0]?.username,
+    user_vote: userVote ?? undefined,
+  };
+}
+
+function mapComment(row: CommentRow, userVote?: number | null): Comment {
+  return {
+    id: row.id,
+    post_id: row.post_id,
+    user_id: row.user_id,
+    parent_id: row.parent_id,
+    body: row.body,
+    created_at: row.created_at,
+    score: row.score,
+    username: row.users?.[0]?.username,
+    user_vote: userVote ?? undefined,
+  };
+}
+
+export async function listPosts(
   opts: { sort?: "hot" | "new" | "top"; userId?: number; limit?: number } = {},
-): Post[] {
+): Promise<Post[]> {
   const limit = opts.limit ?? 50;
   const userId = opts.userId ?? 0;
-  const rows = db
-    .prepare(
-      `SELECT p.*, u.username,
-			        (SELECT v.value FROM votes v WHERE v.user_id = ? AND v.target_kind='post' AND v.target_id = p.id) AS user_vote
-			 FROM posts p JOIN users u ON u.id = p.user_id
-			 WHERE p.flagged = 0
-			 ORDER BY p.created_at DESC
-			 LIMIT 500`,
+  const { data, error } = await supabase
+    .from("posts")
+    .select(
+      "id, user_id, title, url, body, tags, created_at, score, comment_count, ai_summary, flagged, users(username)",
     )
-    .all(userId) as Post[];
+    .eq("flagged", 0)
+    .order("created_at", { ascending: false })
+    .limit(500);
+  if (error) throw new Error(`Failed to list posts: ${error.message}`);
+  const rows = ((data ?? []) as PostRow[]).map((row) => mapPost(row));
+
+  if (userId > 0 && rows.length > 0) {
+    const ids = rows.map((p) => p.id);
+    const { data: voteRows, error: voteError } = await supabase
+      .from("votes")
+      .select("target_id, value")
+      .eq("user_id", userId)
+      .eq("target_kind", "post")
+      .in("target_id", ids);
+    if (voteError) throw new Error(`Failed to load post votes: ${voteError.message}`);
+    const map = new Map<number, number>();
+    for (const row of voteRows ?? []) map.set(row.target_id as number, row.value as number);
+    for (const post of rows) post.user_vote = map.get(post.id);
+  }
 
   if (opts.sort === "new") {
     return rows.slice(0, limit);
@@ -30,53 +102,91 @@ export function listPosts(
     .map((x) => x.p);
 }
 
-export function getPost(id: number, userId = 0): Post | null {
-  const row = db
-    .prepare(
-      `SELECT p.*, u.username,
-			        (SELECT v.value FROM votes v WHERE v.user_id = ? AND v.target_kind='post' AND v.target_id = p.id) AS user_vote
-			 FROM posts p JOIN users u ON u.id = p.user_id
-			 WHERE p.id = ?`,
+export async function getPost(id: number, userId = 0): Promise<Post | null> {
+  const { data, error } = await supabase
+    .from("posts")
+    .select(
+      "id, user_id, title, url, body, tags, created_at, score, comment_count, ai_summary, flagged, users(username)",
     )
-    .get(userId, id) as Post | undefined;
-  return row ?? null;
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(`Failed to get post: ${error.message}`);
+  if (!data) return null;
+  const post = mapPost(data as PostRow);
+  if (userId > 0) {
+    const { data: voteRow, error: voteError } = await supabase
+      .from("votes")
+      .select("value")
+      .eq("user_id", userId)
+      .eq("target_kind", "post")
+      .eq("target_id", id)
+      .maybeSingle();
+    if (voteError) throw new Error(`Failed to get post vote: ${voteError.message}`);
+    post.user_vote = (voteRow?.value as number | undefined) ?? undefined;
+  }
+  return post;
 }
 
-export function getComments(postId: number, userId = 0): Comment[] {
-  return db
-    .prepare(
-      `SELECT c.*, u.username,
-			        (SELECT v.value FROM votes v WHERE v.user_id = ? AND v.target_kind='comment' AND v.target_id = c.id) AS user_vote
-			 FROM comments c JOIN users u ON u.id = c.user_id
-			 WHERE c.post_id = ?
-			 ORDER BY c.created_at ASC`,
-    )
-    .all(userId, postId) as Comment[];
+export async function getComments(postId: number, userId = 0): Promise<Comment[]> {
+  const { data, error } = await supabase
+    .from("comments")
+    .select("id, post_id, user_id, parent_id, body, created_at, score, users(username)")
+    .eq("post_id", postId)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`Failed to load comments: ${error.message}`);
+  const comments = ((data ?? []) as CommentRow[]).map((row) => mapComment(row));
+  if (userId > 0 && comments.length > 0) {
+    const ids = comments.map((c) => c.id);
+    const { data: voteRows, error: voteError } = await supabase
+      .from("votes")
+      .select("target_id, value")
+      .eq("user_id", userId)
+      .eq("target_kind", "comment")
+      .in("target_id", ids);
+    if (voteError) {
+      throw new Error(`Failed to load comment votes: ${voteError.message}`);
+    }
+    const voteMap = new Map<number, number>();
+    for (const row of voteRows ?? []) voteMap.set(row.target_id as number, row.value as number);
+    for (const comment of comments) comment.user_vote = voteMap.get(comment.id);
+  }
+  return comments;
 }
 
-export function createPost(input: {
+export async function createPost(input: {
   userId: number;
   title: string;
   url: string | null;
   body: string | null;
   tags: string | null;
-}): number {
-  const stmt = db.prepare(
-    `INSERT INTO posts (user_id, title, url, body, tags, created_at, score)
-		 VALUES (?, ?, ?, ?, ?, ?, 1)`,
-  );
-  const result = stmt.run(
-    input.userId,
-    input.title,
-    input.url,
-    input.body,
-    input.tags,
-    now(),
-  );
-  const postId = Number(result.lastInsertRowid);
-  db.prepare(
-    `INSERT INTO votes (user_id, target_kind, target_id, value, created_at) VALUES (?, 'post', ?, 1, ?)`,
-  ).run(input.userId, postId, now());
+}): Promise<number> {
+  const createdAt = now();
+  const { data, error } = await supabase
+    .from("posts")
+    .insert({
+      user_id: input.userId,
+      title: input.title,
+      url: input.url,
+      body: input.body,
+      tags: input.tags,
+      created_at: createdAt,
+      score: 1,
+      comment_count: 0,
+      flagged: 0,
+    })
+    .select("id")
+    .single();
+  if (error) throw new Error(`Failed to create post: ${error.message}`);
+  const postId = data.id as number;
+
+  const { error: voteError } = await supabase.from("votes").insert({
+    user_id: input.userId,
+    target_kind: "post",
+    target_id: postId,
+    value: 1,
+    created_at: createdAt,
+  });
+  if (voteError) throw new Error(`Failed to create initial post vote: ${voteError.message}`);
   return postId;
 }
 
@@ -94,104 +204,152 @@ export function normalizeTagsInput(raw: string): string | null {
   return tags.length ? tags.join(",") : null;
 }
 
-export function createComment(input: {
+export async function createComment(input: {
   userId: number;
   postId: number;
   parentId: number | null;
   body: string;
-}): number {
-  const stmt = db.prepare(
-    `INSERT INTO comments (post_id, user_id, parent_id, body, created_at, score)
-		 VALUES (?, ?, ?, ?, ?, 1)`,
-  );
-  const result = stmt.run(
-    input.postId,
-    input.userId,
-    input.parentId,
-    input.body,
-    now(),
-  );
-  const id = Number(result.lastInsertRowid);
-  db.prepare(
-    "UPDATE posts SET comment_count = comment_count + 1 WHERE id = ?",
-  ).run(input.postId);
-  db.prepare(
-    `INSERT INTO votes (user_id, target_kind, target_id, value, created_at) VALUES (?, 'comment', ?, 1, ?)`,
-  ).run(input.userId, id, now());
+}): Promise<number> {
+  const createdAt = now();
+  const { data, error } = await supabase
+    .from("comments")
+    .insert({
+      post_id: input.postId,
+      user_id: input.userId,
+      parent_id: input.parentId,
+      body: input.body,
+      created_at: createdAt,
+      score: 1,
+    })
+    .select("id")
+    .single();
+  if (error) throw new Error(`Failed to create comment: ${error.message}`);
+  const id = data.id as number;
+
+  const { data: postRow, error: postError } = await supabase
+    .from("posts")
+    .select("comment_count")
+    .eq("id", input.postId)
+    .single();
+  if (postError) throw new Error(`Failed to load comment_count: ${postError.message}`);
+  const { error: postUpdateError } = await supabase
+    .from("posts")
+    .update({ comment_count: (postRow.comment_count as number) + 1 })
+    .eq("id", input.postId);
+  if (postUpdateError) {
+    throw new Error(`Failed to update comment_count: ${postUpdateError.message}`);
+  }
+
+  const { error: voteError } = await supabase.from("votes").insert({
+    user_id: input.userId,
+    target_kind: "comment",
+    target_id: id,
+    value: 1,
+    created_at: createdAt,
+  });
+  if (voteError) throw new Error(`Failed to create initial comment vote: ${voteError.message}`);
   return id;
 }
 
-export function vote(input: {
+export async function vote(input: {
   userId: number;
   kind: "post" | "comment";
   targetId: number;
   value: 1 | -1 | 0;
-}): void {
-  const existing = db
-    .prepare(
-      `SELECT value FROM votes WHERE user_id = ? AND target_kind = ? AND target_id = ?`,
-    )
-    .get(input.userId, input.kind, input.targetId) as
-    | { value: number }
-    | undefined;
+}): Promise<void> {
+  const { data: existing, error: existingError } = await supabase
+    .from("votes")
+    .select("value")
+    .eq("user_id", input.userId)
+    .eq("target_kind", input.kind)
+    .eq("target_id", input.targetId)
+    .maybeSingle();
+  if (existingError) throw new Error(`Failed to read existing vote: ${existingError.message}`);
 
-  const oldValue = existing?.value ?? 0;
+  const oldValue = (existing?.value as number | undefined) ?? 0;
   const newValue = input.value;
   const delta = newValue - oldValue;
   if (delta === 0) return;
 
-  const tx = db.transaction(() => {
-    if (newValue === 0) {
-      db.prepare(
-        `DELETE FROM votes WHERE user_id = ? AND target_kind = ? AND target_id = ?`,
-      ).run(input.userId, input.kind, input.targetId);
-    } else if (existing) {
-      db.prepare(
-        `UPDATE votes SET value = ?, created_at = ? WHERE user_id = ? AND target_kind = ? AND target_id = ?`,
-      ).run(newValue, now(), input.userId, input.kind, input.targetId);
-    } else {
-      db.prepare(
-        `INSERT INTO votes (user_id, target_kind, target_id, value, created_at) VALUES (?, ?, ?, ?, ?)`,
-      ).run(input.userId, input.kind, input.targetId, newValue, now());
-    }
+  if (newValue === 0) {
+    const { error } = await supabase
+      .from("votes")
+      .delete()
+      .eq("user_id", input.userId)
+      .eq("target_kind", input.kind)
+      .eq("target_id", input.targetId);
+    if (error) throw new Error(`Failed to delete vote: ${error.message}`);
+  } else if (existing) {
+    const { error } = await supabase
+      .from("votes")
+      .update({ value: newValue, created_at: now() })
+      .eq("user_id", input.userId)
+      .eq("target_kind", input.kind)
+      .eq("target_id", input.targetId);
+    if (error) throw new Error(`Failed to update vote: ${error.message}`);
+  } else {
+    const { error } = await supabase.from("votes").insert({
+      user_id: input.userId,
+      target_kind: input.kind,
+      target_id: input.targetId,
+      value: newValue,
+      created_at: now(),
+    });
+    if (error) throw new Error(`Failed to insert vote: ${error.message}`);
+  }
 
-    const table = input.kind === "post" ? "posts" : "comments";
-    db.prepare(`UPDATE ${table} SET score = score + ? WHERE id = ?`).run(
-      delta,
-      input.targetId,
-    );
-    // karma: author gains delta
-    const authorRow = db
-      .prepare(`SELECT user_id FROM ${table} WHERE id = ?`)
-      .get(input.targetId) as { user_id: number } | undefined;
-    if (authorRow && authorRow.user_id !== input.userId) {
-      db.prepare(`UPDATE users SET karma = karma + ? WHERE id = ?`).run(
-        delta,
-        authorRow.user_id,
-      );
-    }
-  });
-  tx();
+  const table = input.kind === "post" ? "posts" : "comments";
+  const { data: targetRow, error: targetError } = await supabase
+    .from(table)
+    .select("score, user_id")
+    .eq("id", input.targetId)
+    .single();
+  if (targetError) throw new Error(`Failed to load target row: ${targetError.message}`);
+
+  const { error: scoreError } = await supabase
+    .from(table)
+    .update({ score: (targetRow.score as number) + delta })
+    .eq("id", input.targetId);
+  if (scoreError) throw new Error(`Failed to update score: ${scoreError.message}`);
+
+  if ((targetRow.user_id as number) !== input.userId) {
+    const { data: authorRow, error: authorError } = await supabase
+      .from("users")
+      .select("karma")
+      .eq("id", targetRow.user_id as number)
+      .single();
+    if (authorError) throw new Error(`Failed to load author karma: ${authorError.message}`);
+    const { error: karmaError } = await supabase
+      .from("users")
+      .update({ karma: (authorRow.karma as number) + delta })
+      .eq("id", targetRow.user_id as number);
+    if (karmaError) throw new Error(`Failed to update author karma: ${karmaError.message}`);
+  }
 }
 
-export function setAiSummary(postId: number, summary: string): void {
-  db.prepare("UPDATE posts SET ai_summary = ? WHERE id = ?").run(
-    summary,
-    postId,
-  );
+export async function setAiSummary(postId: number, summary: string): Promise<void> {
+  const { error } = await supabase
+    .from("posts")
+    .update({ ai_summary: summary })
+    .eq("id", postId);
+  if (error) throw new Error(`Failed to save AI summary: ${error.message}`);
 }
 
-export function flagPost(postId: number): void {
-  db.prepare("UPDATE posts SET flagged = 1 WHERE id = ?").run(postId);
+export async function flagPost(postId: number): Promise<void> {
+  const { error } = await supabase.from("posts").update({ flagged: 1 }).eq("id", postId);
+  if (error) throw new Error(`Failed to flag post: ${error.message}`);
 }
 
-export function getTrendingTags(hours: number, limit = 8): string[] {
+export async function getTrendingTags(hours: number, limit = 8): Promise<string[]> {
   const since = now() - hours * 3600;
-  const rows = db
-    .prepare(
-      `SELECT tags FROM posts WHERE flagged = 0 AND created_at >= ? AND tags IS NOT NULL AND tags != ''`,
-    )
-    .all(since) as { tags: string }[];
+  const { data, error } = await supabase
+    .from("posts")
+    .select("tags")
+    .eq("flagged", 0)
+    .gte("created_at", since)
+    .not("tags", "is", null);
+  if (error) throw new Error(`Failed to load trending tags: ${error.message}`);
+  const rows = (data ?? []) as { tags: string }[];
   const counts = new Map<string, number>();
   for (const row of rows) {
     for (const tag of parseTags(row.tags)) {
@@ -204,15 +362,18 @@ export function getTrendingTags(hours: number, limit = 8): string[] {
     .map(([t]) => t);
 }
 
-export function getDigest(hours: number): Post[] {
+export async function getDigest(hours: number): Promise<Post[]> {
   const since = now() - hours * 3600;
-  return db
-    .prepare(
-      `SELECT p.*, u.username, NULL AS user_vote
-			 FROM posts p JOIN users u ON u.id = p.user_id
-			 WHERE p.flagged = 0 AND p.created_at >= ?
-			 ORDER BY p.score DESC, p.comment_count DESC
-			 LIMIT 10`,
+  const { data, error } = await supabase
+    .from("posts")
+    .select(
+      "id, user_id, title, url, body, tags, created_at, score, comment_count, ai_summary, flagged, users(username)",
     )
-    .all(since) as Post[];
+    .eq("flagged", 0)
+    .gte("created_at", since)
+    .order("score", { ascending: false })
+    .order("comment_count", { ascending: false })
+    .limit(10);
+  if (error) throw new Error(`Failed to get digest posts: ${error.message}`);
+  return ((data ?? []) as PostRow[]).map((row) => mapPost(row, null));
 }
