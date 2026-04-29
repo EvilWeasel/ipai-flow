@@ -1,16 +1,57 @@
 <script lang="ts">
 	import './layout.css';
 	import { page } from '$app/state';
-	import { MessageSquare, PlusSquare, User } from 'lucide-svelte';
+	import { onMount } from 'svelte';
+	import { MessageSquare, PlusSquare, User, X } from 'lucide-svelte';
 	import type { LayoutData } from './$types';
 
 	let { children, data }: { children: import('svelte').Snippet; data: LayoutData } = $props();
+	type ModerationToast = { id: string; message: string };
+	let moderationToasts = $state<ModerationToast[]>([]);
 
 	const navItems = $derived([
 		{ href: '/', label: 'Feed', icon: MessageSquare, match: (p: string) => p === '/' || p.startsWith('/post') || p.startsWith('/digest') },
 		{ href: '/submit', label: 'Submit', icon: PlusSquare, match: (p: string) => p.startsWith('/submit') },
 		{ href: data.user ? '/account' : '/login', label: 'Account', icon: User, match: (p: string) => p.startsWith('/account') || p.startsWith('/login') || p.startsWith('/register') }
 	] as const);
+
+	function dismissToast(id: string) {
+		moderationToasts = moderationToasts.filter((toast) => toast.id !== id);
+	}
+
+	onMount(() => {
+		if (!data.user) return;
+		const seenKey = `ipaiflow:moderation-seen:${data.user.id}`;
+		const seen = new Set<string>(JSON.parse(localStorage.getItem(seenKey) ?? '[]'));
+
+		async function pollModerationNotifications() {
+			try {
+				const res = await fetch('/api/moderation/notifications');
+				if (!res.ok) return;
+				const payload = (await res.json()) as {
+					notifications?: Array<{ id: string; message: string }>;
+				};
+				const next = [];
+				for (const notification of payload.notifications ?? []) {
+					if (seen.has(notification.id)) continue;
+					seen.add(notification.id);
+					next.push({ id: notification.id, message: notification.message });
+				}
+				if (next.length === 0) return;
+				localStorage.setItem(seenKey, JSON.stringify([...seen].slice(-100)));
+				moderationToasts = [...moderationToasts, ...next];
+				for (const toast of next) {
+					window.setTimeout(() => dismissToast(toast.id), 7000);
+				}
+			} catch {
+				/* ignore notification polling failures */
+			}
+		}
+
+		void pollModerationNotifications();
+		const interval = window.setInterval(pollModerationNotifications, 5000);
+		return () => window.clearInterval(interval);
+	});
 </script>
 
 <svelte:head>
@@ -51,6 +92,26 @@
 	<main class="flex-1 pb-20">
 		{@render children()}
 	</main>
+
+	{#if moderationToasts.length > 0}
+		<div class="fixed right-4 top-16 z-50 w-[min(24rem,calc(100vw-2rem))] space-y-2">
+			{#each moderationToasts as toast (toast.id)}
+				<div class="rounded-md border border-destructive/40 bg-card px-4 py-3 text-sm shadow-lg">
+					<div class="flex items-start gap-3">
+						<p class="flex-1 text-foreground">{toast.message}</p>
+						<button
+							type="button"
+							class="text-muted-foreground hover:text-foreground"
+							aria-label="Dismiss"
+							onclick={() => dismissToast(toast.id)}
+						>
+							<X class="h-4 w-4" />
+						</button>
+					</div>
+				</div>
+			{/each}
+		</div>
+	{/if}
 
 	<nav class="fixed bottom-0 inset-x-0 z-30 border-t border-border bg-background pb-safe">
 		<div class="mx-auto max-w-3xl grid grid-cols-3">

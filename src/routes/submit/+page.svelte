@@ -15,6 +15,7 @@
 					tagsRaw?: string;
 					urlRaw?: string;
 					body?: string;
+					moderationStatus?: 'approved' | 'pending' | 'blocked';
 			  }
 			| undefined
 	);
@@ -73,7 +74,7 @@
 		<div class="relative flex items-center py-1">
 			<div class="flex-1 h-px bg-border"></div>
 			<span class="px-3 text-[11px] uppercase tracking-wider text-muted-foreground">
-				Provide a link or text
+				Link
 			</span>
 			<div class="flex-1 h-px bg-border"></div>
 		</div>
@@ -84,6 +85,7 @@
 				id="url"
 				name="url"
 				type="url"
+				required
 				value={formData?.urlRaw ?? ''}
 				placeholder="https://…"
 				disabled={pending}
@@ -92,7 +94,7 @@
 
 		<div class="relative flex items-center">
 			<div class="flex-1 h-px bg-border"></div>
-			<span class="px-3 text-[11px] uppercase tracking-wider text-muted-foreground">or</span>
+			<span class="px-3 text-[11px] uppercase tracking-wider text-muted-foreground">optional context</span>
 			<div class="flex-1 h-px bg-border"></div>
 		</div>
 
@@ -114,12 +116,12 @@
 
 		<div class="flex flex-wrap items-center justify-between gap-3 pt-1">
 			<p class="text-xs text-muted-foreground">
-				Posts are checked with AI moderation before they appear.
+				Posts appear on your detail page while AI moderation runs.
 			</p>
 			<div class="flex justify-end gap-2">
 			<Button href="/" variant="ghost" aria-disabled={pending}>Cancel</Button>
 			<Button type="submit" class="uppercase tracking-wider" disabled={pending}>
-				{pending ? 'Moderating…' : 'Submit Post'}
+				{pending ? 'Submitting…' : 'Submit Post'}
 			</Button>
 			</div>
 		</div>

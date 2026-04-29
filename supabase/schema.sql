@@ -31,11 +31,36 @@ create table if not exists public.posts (
   score integer not null default 1,
   comment_count integer not null default 0,
   ai_summary text,
-  flagged integer not null default 0
+  flagged integer not null default 0,
+  moderation_status text not null default 'approved'
+    constraint posts_moderation_status_check
+    check (moderation_status in ('approved', 'pending', 'blocked')),
+  moderation_reason text
 );
+
+alter table public.posts
+  add column if not exists moderation_status text not null default 'approved';
+alter table public.posts
+  add column if not exists moderation_reason text;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'posts_moderation_status_check'
+      and conrelid = 'public.posts'::regclass
+  ) then
+    alter table public.posts
+      add constraint posts_moderation_status_check
+      check (moderation_status in ('approved', 'pending', 'blocked'));
+  end if;
+end $$;
 
 create index if not exists idx_posts_created on public.posts(created_at desc);
 create index if not exists idx_posts_flagged_created on public.posts(flagged, created_at desc);
+create index if not exists idx_posts_moderation_created
+  on public.posts(moderation_status, flagged, created_at desc);
 
 create table if not exists public.comments (
   id bigint generated always as identity primary key,

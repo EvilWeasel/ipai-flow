@@ -35,6 +35,8 @@ export type Post = {
   comment_count: number;
   ai_summary: string | null;
   flagged: number;
+  moderation_status?: "approved" | "pending" | "blocked";
+  moderation_reason?: string | null;
   username?: string;
   user_vote?: number;
 };

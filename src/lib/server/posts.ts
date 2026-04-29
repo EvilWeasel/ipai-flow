@@ -13,6 +13,8 @@ type PostRow = {
   comment_count: number;
   ai_summary: string | null;
   flagged: number;
+  moderation_status?: ModerationStatus | null;
+  moderation_reason?: string | null;
   users?: UserRelation | null;
 };
 
@@ -30,6 +32,38 @@ type CommentRow = {
 };
 
 type UserRelation = { username: string } | { username: string }[];
+
+type LegacyPendingComment = {
+  id: number;
+  post_id: number;
+  user_id: number;
+  parent_id: number | null;
+  body: string;
+  created_at: number;
+  username: string;
+};
+
+let nextLegacyPendingCommentId = -1;
+const legacyPendingComments = new Map<number, LegacyPendingComment>();
+const legacyBlockedCommentNotifications = new Map<number, ModerationNotification[]>();
+
+const POST_SELECT =
+  "id, user_id, title, url, body, tags, created_at, score, comment_count, ai_summary, flagged, moderation_status, moderation_reason, users(username)";
+const LEGACY_POST_SELECT =
+  "id, user_id, title, url, body, tags, created_at, score, comment_count, ai_summary, flagged, users(username)";
+
+function statusFromPostRow(row: Pick<PostRow, "flagged" | "moderation_status">): ModerationStatus {
+  if (row.moderation_status) return row.moderation_status;
+  if (row.flagged === 2) return "blocked";
+  if (row.flagged === 1) return "pending";
+  return "approved";
+}
+
+function postFlagForStatus(status: ModerationStatus): number {
+  if (status === "approved") return 0;
+  if (status === "blocked") return 2;
+  return 1;
+}
 
 function relationUsername(users: UserRelation | null | undefined, userId: number): string {
   const user = Array.isArray(users) ? users[0] : users;
@@ -50,6 +84,8 @@ function mapPost(row: PostRow, userVote?: number | null): Post {
     comment_count: row.comment_count,
     ai_summary: row.ai_summary,
     flagged: row.flagged,
+    moderation_status: statusFromPostRow(row),
+    moderation_reason: row.moderation_reason ?? null,
     username: relationUsername(row.users, row.user_id),
     user_vote: userVote ?? undefined,
   };
@@ -71,6 +107,21 @@ function mapComment(row: CommentRow, userVote?: number | null): Comment {
   };
 }
 
+function mapLegacyPendingComment(row: LegacyPendingComment): Comment {
+  return {
+    id: row.id,
+    post_id: row.post_id,
+    user_id: row.user_id,
+    parent_id: row.parent_id,
+    body: row.body,
+    created_at: row.created_at,
+    score: 0,
+    moderation_status: "pending",
+    moderation_reason: "AI moderation pending",
+    username: row.username,
+  };
+}
+
 function isMissingModerationColumn(error: { message?: string; code?: string } | null | undefined): boolean {
   const message = error?.message?.toLowerCase() ?? "";
   return (
@@ -79,19 +130,38 @@ function isMissingModerationColumn(error: { message?: string; code?: string } | 
   );
 }
 
+function isApprovedPost(row: PostRow): boolean {
+  return row.flagged === 0 && statusFromPostRow(row) === "approved";
+}
+
+function canViewPost(row: PostRow, userId: number): boolean {
+  return isApprovedPost(row) || (userId > 0 && row.user_id === userId);
+}
+
 export async function listPosts(
   opts: { sort?: "hot" | "new" | "top"; userId?: number; limit?: number } = {},
 ): Promise<Post[]> {
   const limit = opts.limit ?? 50;
   const userId = opts.userId ?? 0;
-  const { data, error } = await supabase
+  const initial = await supabase
     .from("posts")
-    .select(
-      "id, user_id, title, url, body, tags, created_at, score, comment_count, ai_summary, flagged, users(username)",
-    )
+    .select(POST_SELECT)
+    .eq("moderation_status", "approved")
     .eq("flagged", 0)
     .order("created_at", { ascending: false })
     .limit(500);
+  let data: unknown = initial.data;
+  let error = initial.error;
+  if (isMissingModerationColumn(error)) {
+    const legacy = await supabase
+      .from("posts")
+      .select(LEGACY_POST_SELECT)
+      .eq("flagged", 0)
+      .order("created_at", { ascending: false })
+      .limit(500);
+    data = legacy.data;
+    error = legacy.error;
+  }
   if (error) throw new Error(`Failed to list posts: ${error.message}`);
   const rows = ((data ?? []) as PostRow[]).map((row) => mapPost(row));
 
@@ -124,16 +194,27 @@ export async function listPosts(
 }
 
 export async function getPost(id: number, userId = 0): Promise<Post | null> {
-  const { data, error } = await supabase
+  const initial = await supabase
     .from("posts")
-    .select(
-      "id, user_id, title, url, body, tags, created_at, score, comment_count, ai_summary, flagged, users(username)",
-    )
+    .select(POST_SELECT)
     .eq("id", id)
     .maybeSingle();
+  let data: unknown = initial.data;
+  let error = initial.error;
+  if (isMissingModerationColumn(error)) {
+    const legacy = await supabase
+      .from("posts")
+      .select(LEGACY_POST_SELECT)
+      .eq("id", id)
+      .maybeSingle();
+    data = legacy.data;
+    error = legacy.error;
+  }
   if (error) throw new Error(`Failed to get post: ${error.message}`);
   if (!data) return null;
-  const post = mapPost(data as PostRow);
+  const row = data as PostRow;
+  if (!canViewPost(row, userId)) return null;
+  const post = mapPost(row);
   if (userId > 0) {
     const { data: voteRow, error: voteError } = await supabase
       .from("votes")
@@ -171,12 +252,15 @@ export async function getComments(postId: number, userId = 0): Promise<Comment[]
       .eq("post_id", postId)
       .order("created_at", { ascending: true });
     if (legacyError) throw new Error(`Failed to load comments: ${legacyError.message}`);
-    return loadCommentVotes(
-      ((legacyData ?? []) as CommentRow[]).map((row) =>
-        mapComment({ ...row, moderation_status: "approved" }),
-      ),
-      userId,
+    const pending = userId > 0
+      ? [...legacyPendingComments.values()]
+          .filter((comment) => comment.post_id === postId && comment.user_id === userId)
+          .map((comment) => mapLegacyPendingComment(comment))
+      : [];
+    const approved = ((legacyData ?? []) as CommentRow[]).map((row) =>
+      mapComment({ ...row, moderation_status: "approved" }),
     );
+    return loadCommentVotes([...approved, ...pending], userId);
   }
   if (error) throw new Error(`Failed to load comments: ${error.message}`);
   const comments = ((data ?? []) as CommentRow[]).map((row) => mapComment(row));
@@ -209,9 +293,12 @@ export async function createPost(input: {
   url: string | null;
   body: string | null;
   tags: string | null;
+  moderationStatus?: ModerationStatus;
+  moderationReason?: string | null;
 }): Promise<number> {
   const createdAt = now();
-  const { data, error } = await supabase
+  const moderationStatus = input.moderationStatus ?? "approved";
+  const initial = await supabase
     .from("posts")
     .insert({
       user_id: input.userId,
@@ -222,12 +309,36 @@ export async function createPost(input: {
       created_at: createdAt,
       score: 1,
       comment_count: 0,
-      flagged: 0,
+      flagged: postFlagForStatus(moderationStatus),
+      moderation_status: moderationStatus,
+      moderation_reason: input.moderationReason ?? null,
     })
     .select("id")
     .single();
+  let data: unknown = initial.data;
+  let error = initial.error;
+  if (isMissingModerationColumn(error)) {
+    const legacy = await supabase
+      .from("posts")
+      .insert({
+        user_id: input.userId,
+        title: input.title,
+        url: input.url,
+        body: input.body,
+        tags: input.tags,
+        created_at: createdAt,
+        score: 1,
+        comment_count: 0,
+        flagged: postFlagForStatus(moderationStatus),
+      })
+      .select("id")
+      .single();
+    data = legacy.data;
+    error = legacy.error;
+  }
   if (error) throw new Error(`Failed to create post: ${error.message}`);
-  const postId = data.id as number;
+  if (!data) throw new Error("Failed to create post: empty insert response");
+  const postId = (data as { id: number }).id;
 
   const { error: voteError } = await supabase.from("votes").insert({
     user_id: input.userId,
@@ -256,6 +367,7 @@ export function normalizeTagsInput(raw: string): string | null {
 
 export async function createComment(input: {
   userId: number;
+  username?: string;
   postId: number;
   parentId: number | null;
   body: string;
@@ -280,6 +392,9 @@ export async function createComment(input: {
     .single();
   if (isMissingModerationColumn(error) && moderationStatus === "approved") {
     return createLegacyApprovedComment(input, createdAt);
+  }
+  if (isMissingModerationColumn(error) && moderationStatus === "pending") {
+    return createLegacyPendingComment(input, createdAt);
   }
   if (error) throw new Error(`Failed to create comment: ${error.message}`);
   const id = data.id as number;
@@ -309,6 +424,228 @@ export async function createComment(input: {
   });
   if (voteError) throw new Error(`Failed to create initial comment vote: ${voteError.message}`);
   return id;
+}
+
+function createLegacyPendingComment(
+  input: {
+    userId: number;
+    username?: string;
+    postId: number;
+    parentId: number | null;
+    body: string;
+  },
+  createdAt: number,
+): number {
+  const id = nextLegacyPendingCommentId--;
+  legacyPendingComments.set(id, {
+    id,
+    post_id: input.postId,
+    user_id: input.userId,
+    parent_id: input.parentId,
+    body: input.body,
+    created_at: createdAt,
+    username: input.username ?? `member-${input.userId}`,
+  });
+  return id;
+}
+
+export async function updatePostModeration(
+  postId: number,
+  status: ModerationStatus,
+  reason: string | null = null,
+): Promise<void> {
+  const update = {
+    moderation_status: status,
+    moderation_reason: status === "approved" ? null : reason,
+    flagged: postFlagForStatus(status),
+  };
+  const { error } = await supabase.from("posts").update(update).eq("id", postId);
+  if (isMissingModerationColumn(error)) {
+    const legacy = await supabase
+      .from("posts")
+      .update({ flagged: postFlagForStatus(status) })
+      .eq("id", postId);
+    if (legacy.error) throw new Error(`Failed to update post moderation: ${legacy.error.message}`);
+    return;
+  }
+  if (error) throw new Error(`Failed to update post moderation: ${error.message}`);
+}
+
+export async function updateCommentModeration(
+  commentId: number,
+  status: ModerationStatus,
+  reason: string | null = null,
+): Promise<void> {
+  if (commentId < 0) {
+    const pending = legacyPendingComments.get(commentId);
+    if (!pending) return;
+    if (status === "approved") {
+      await createLegacyApprovedComment(
+        {
+          userId: pending.user_id,
+          postId: pending.post_id,
+          parentId: pending.parent_id,
+          body: pending.body,
+        },
+        now(),
+      );
+      legacyPendingComments.delete(commentId);
+      return;
+    }
+    if (status === "blocked") {
+      legacyPendingComments.delete(commentId);
+      const notification: ModerationNotification = {
+        id: `legacy-comment:${commentId}`,
+        kind: "comment",
+        targetId: commentId,
+        postId: pending.post_id,
+        message: "One of your comments was removed by moderation.",
+        created_at: now(),
+      };
+      legacyBlockedCommentNotifications.set(pending.user_id, [
+        notification,
+        ...(legacyBlockedCommentNotifications.get(pending.user_id) ?? []),
+      ].slice(0, 20));
+    }
+    return;
+  }
+
+  const { data: existing, error: existingError } = await supabase
+    .from("comments")
+    .select("post_id, user_id, score, moderation_status")
+    .eq("id", commentId)
+    .maybeSingle();
+  if (existingError) throw new Error(`Failed to load comment moderation: ${existingError.message}`);
+  if (!existing) return;
+
+  const previousStatus = (existing.moderation_status as ModerationStatus | undefined) ?? "approved";
+  if (previousStatus === status && status !== "pending") return;
+
+  const { error } = await supabase
+    .from("comments")
+    .update({
+      moderation_status: status,
+      moderation_reason: status === "approved" ? null : reason,
+      score: status === "approved" ? 1 : 0,
+    })
+    .eq("id", commentId);
+  if (error) throw new Error(`Failed to update comment moderation: ${error.message}`);
+
+  if (status !== "approved" || previousStatus === "approved") return;
+
+  const postId = existing.post_id as number;
+  const userId = existing.user_id as number;
+  const { data: postRow, error: postError } = await supabase
+    .from("posts")
+    .select("comment_count")
+    .eq("id", postId)
+    .single();
+  if (postError) throw new Error(`Failed to load comment_count: ${postError.message}`);
+  const { error: postUpdateError } = await supabase
+    .from("posts")
+    .update({ comment_count: (postRow.comment_count as number) + 1 })
+    .eq("id", postId);
+  if (postUpdateError) {
+    throw new Error(`Failed to update comment_count: ${postUpdateError.message}`);
+  }
+
+  const { error: voteError } = await supabase.from("votes").upsert({
+    user_id: userId,
+    target_kind: "comment",
+    target_id: commentId,
+    value: 1,
+    created_at: now(),
+  });
+  if (voteError) throw new Error(`Failed to create initial comment vote: ${voteError.message}`);
+}
+
+export type ModerationNotification = {
+  id: string;
+  kind: "post" | "comment";
+  targetId: number;
+  postId: number;
+  message: string;
+  created_at: number;
+};
+
+export async function listModerationNotifications(userId: number): Promise<ModerationNotification[]> {
+  const since = now() - 24 * 60 * 60;
+  const notifications: ModerationNotification[] = [
+    ...(legacyBlockedCommentNotifications.get(userId) ?? []).filter(
+      (notification) => notification.created_at >= since,
+    ),
+  ];
+
+  const initialPosts = await supabase
+    .from("posts")
+    .select("id, title, created_at, moderation_reason, moderation_status, flagged")
+    .eq("user_id", userId)
+    .eq("moderation_status", "blocked")
+    .gte("created_at", since)
+    .order("created_at", { ascending: false })
+    .limit(20);
+  let postRows: unknown = initialPosts.data;
+  let postError = initialPosts.error;
+  if (isMissingModerationColumn(postError)) {
+    const legacy = await supabase
+      .from("posts")
+      .select("id, title, created_at, flagged")
+      .eq("user_id", userId)
+      .eq("flagged", 2)
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(20);
+    postRows = legacy.data;
+    postError = legacy.error;
+  }
+  if (postError) throw new Error(`Failed to load post moderation notifications: ${postError.message}`);
+  for (const row of (postRows ?? []) as Array<{
+    id: number;
+    title: string;
+    created_at: number;
+    moderation_reason?: string | null;
+  }>) {
+    notifications.push({
+      id: `post:${row.id}`,
+      kind: "post",
+      targetId: row.id,
+      postId: row.id,
+      message: `Your post "${row.title}" was removed by moderation.`,
+      created_at: row.created_at,
+    });
+  }
+
+  const { data: commentRows, error: commentError } = await supabase
+    .from("comments")
+    .select("id, post_id, created_at, moderation_reason")
+    .eq("user_id", userId)
+    .eq("moderation_status", "blocked")
+    .gte("created_at", since)
+    .order("created_at", { ascending: false })
+    .limit(20);
+  if (isMissingModerationColumn(commentError)) {
+    return notifications.sort((a, b) => b.created_at - a.created_at);
+  }
+  if (commentError) {
+    throw new Error(`Failed to load comment moderation notifications: ${commentError.message}`);
+  }
+  for (const row of (commentRows ?? []) as Array<{
+    id: number;
+    post_id: number;
+    created_at: number;
+    moderation_reason?: string | null;
+  }>) {
+    notifications.push({
+      id: `comment:${row.id}`,
+      kind: "comment",
+      targetId: row.id,
+      postId: row.post_id,
+      message: "One of your comments was removed by moderation.",
+      created_at: row.created_at,
+    });
+  }
+
+  return notifications.sort((a, b) => b.created_at - a.created_at);
 }
 
 async function createLegacyApprovedComment(
@@ -366,7 +703,28 @@ export async function vote(input: {
   targetId: number;
   value: 1 | -1 | 0;
 }): Promise<void> {
-  if (input.kind === "comment") {
+  if (input.kind === "post") {
+    const initialPost = await supabase
+      .from("posts")
+      .select("flagged, moderation_status")
+      .eq("id", input.targetId)
+      .single();
+    let postRow: unknown = initialPost.data;
+    let postError = initialPost.error;
+    if (isMissingModerationColumn(postError)) {
+      const legacy = await supabase
+        .from("posts")
+        .select("flagged")
+        .eq("id", input.targetId)
+        .single();
+      postRow = legacy.data;
+      postError = legacy.error;
+    }
+    if (postError) throw new Error(`Failed to load post moderation: ${postError.message}`);
+    if (!isApprovedPost(postRow as PostRow)) {
+      throw new Error("Cannot vote on a post pending moderation");
+    }
+  } else {
     const { data: commentRow, error: commentError } = await supabase
       .from("comments")
       .select("moderation_status")
@@ -489,16 +847,29 @@ export async function getTrendingTags(hours: number, limit = 8): Promise<string[
 
 export async function getDigest(hours: number): Promise<Post[]> {
   const since = now() - hours * 3600;
-  const { data, error } = await supabase
+  const initial = await supabase
     .from("posts")
-    .select(
-      "id, user_id, title, url, body, tags, created_at, score, comment_count, ai_summary, flagged, users(username)",
-    )
+    .select(POST_SELECT)
+    .eq("moderation_status", "approved")
     .eq("flagged", 0)
     .gte("created_at", since)
     .order("score", { ascending: false })
     .order("comment_count", { ascending: false })
     .limit(10);
+  let data: unknown = initial.data;
+  let error = initial.error;
+  if (isMissingModerationColumn(error)) {
+    const legacy = await supabase
+      .from("posts")
+      .select(LEGACY_POST_SELECT)
+      .eq("flagged", 0)
+      .gte("created_at", since)
+      .order("score", { ascending: false })
+      .order("comment_count", { ascending: false })
+      .limit(10);
+    data = legacy.data;
+    error = legacy.error;
+  }
   if (error) throw new Error(`Failed to get digest posts: ${error.message}`);
   return ((data ?? []) as PostRow[]).map((row) => mapPost(row, null));
 }

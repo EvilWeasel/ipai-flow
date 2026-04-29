@@ -1,7 +1,8 @@
 import type { PageServerLoad, Actions } from "./$types";
 import { error, fail, redirect } from "@sveltejs/kit";
 import { createComment, getComments, getPost, vote } from "$lib/server/posts";
-import { moderate } from "$lib/server/ai";
+import { localModerationBlock } from "$lib/server/ai";
+import { moderateCommentInBackground, runInBackground } from "$lib/server/moderation-jobs";
 import { rateLimit } from "$lib/server/rate-limit";
 
 export const load: PageServerLoad = async ({ params, locals }) => {
@@ -20,7 +21,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 };
 
 export const actions: Actions = {
-  comment: async ({ request, params, locals, getClientAddress }) => {
+  comment: async ({ request, params, locals, getClientAddress, platform }) => {
     if (!locals.user) throw redirect(303, "/login");
     if (
       !rateLimit({
@@ -39,44 +40,60 @@ export const actions: Actions = {
     const parentId = parentRaw ? Number(parentRaw) : null;
     if (!body || body.length > 10_000) {
       return fail(400, {
-        message: "comment must be 1–10,000 characters",
+        message: "comment must be 1-10,000 characters",
         body,
         parentId,
       });
     }
-    const mod = await moderate(body);
-    if (mod.status === "blocked") {
+
+    const localBlock = localModerationBlock(body);
+    if (localBlock) {
       return fail(400, {
         ok: false,
-        moderationStatus: mod.status,
-        message: `blocked by moderation: ${mod.reason ?? "unsafe"}`,
+        moderationStatus: "blocked",
+        message:
+          localBlock === "profanity is not allowed"
+            ? "You cannot post that comment because it contains profanity."
+            : `blocked by moderation: ${localBlock}`,
         body,
         parentId,
       });
     }
+
+    const post = await getPost(id, locals.user.id);
+    if (!post) return fail(404, { message: "post not found", body, parentId });
+    if (post.moderation_status !== "approved") {
+      return fail(400, { message: "comments open after post moderation finishes", body, parentId });
+    }
+
+    let commentId: number;
     try {
-      await createComment({
+      commentId = await createComment({
         userId: locals.user.id,
+        username: locals.user.username,
         postId: id,
         parentId,
         body,
-        moderationStatus: mod.status,
-        moderationReason: mod.reason ?? null,
+        moderationStatus: "pending",
+        moderationReason: "AI moderation pending",
       });
-    } catch {
+    } catch (err) {
+      console.error("[comment] create failed", err instanceof Error ? err.message : err);
       return fail(503, {
         message: "comment unavailable right now",
         body,
         parentId,
       });
     }
+
+    runInBackground(platform, "comment", () =>
+      moderateCommentInBackground({ commentId, body }),
+    );
+
     return {
       ok: true,
-      moderationStatus: mod.status,
-      message:
-        mod.status === "pending"
-          ? "Comment saved and pending moderation."
-          : "Comment posted after AI moderation.",
+      moderationStatus: "pending",
+      message: "Comment saved and pending AI moderation.",
     };
   },
   vote: async ({ request, locals, getClientAddress }) => {

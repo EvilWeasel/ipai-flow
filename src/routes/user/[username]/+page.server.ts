@@ -2,7 +2,7 @@ import type { PageServerLoad } from "./$types";
 import { error } from "@sveltejs/kit";
 import { getUserByUsername, listUserPosts } from "$lib/server/users";
 
-export const load: PageServerLoad = async ({ params }) => {
+export const load: PageServerLoad = async ({ params, locals }) => {
   let user;
   try {
     user = await getUserByUsername(params.username);
@@ -14,7 +14,7 @@ export const load: PageServerLoad = async ({ params }) => {
   try {
     return {
       user,
-      posts: await listUserPosts(user),
+      posts: await listUserPosts(user, locals.user?.id ?? 0),
     };
   } catch {
     throw error(503, "database unavailable");

@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 	import Button from '$lib/components/ui/button.svelte';
 	import Textarea from '$lib/components/ui/textarea.svelte';
 	import { ChevronUp, MessageSquare, RefreshCw, Send, Sparkles } from 'lucide-svelte';
 	import { hostname, tagsOf, timeAgo } from '$lib/utils';
+	import { onMount } from 'svelte';
 	import type { Comment } from '$lib/server/db';
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import type { ActionData, PageData } from './$types';
@@ -28,9 +30,22 @@
 	let replyBodies = $state<Record<number, string>>({});
 	let rootCommentPending = $state(false);
 	let replyPendingId = $state<number | null>(null);
+	const postModerationStatus = $derived(data.post.moderation_status ?? 'approved');
+	const postPending = $derived(postModerationStatus === 'pending');
+	const postBlocked = $derived(postModerationStatus === 'blocked');
+	const hasPendingModeration = $derived(
+		postPending || data.comments.some((comment) => comment.moderation_status === 'pending')
+	);
 
 	$effect(() => {
 		summary = initialSummary;
+	});
+
+	onMount(() => {
+		const interval = window.setInterval(() => {
+			if (hasPendingModeration) void invalidateAll();
+		}, 3000);
+		return () => window.clearInterval(interval);
 	});
 
 	$effect(() => {
@@ -177,6 +192,7 @@
 							? 'text-primary'
 							: 'text-muted-foreground hover:text-primary'}"
 						aria-label="Upvote"
+						disabled={postModerationStatus !== 'approved'}
 					>
 						<ChevronUp class="h-5 w-5" strokeWidth={2.4} />
 					</button>
@@ -239,7 +255,26 @@
 					</a>
 					· {timeAgo(data.post.created_at)}
 					· {data.post.comment_count} comment{data.post.comment_count === 1 ? '' : 's'}
+					{#if postPending}
+						<span class="ml-2 inline-flex items-center rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+							Pending AI moderation
+						</span>
+					{:else if postBlocked}
+						<span class="ml-2 inline-flex items-center rounded bg-destructive/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-destructive">
+							Removed by moderation
+						</span>
+					{/if}
 				</div>
+
+				{#if postPending}
+					<p class="mt-3 rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+						This post is visible only to you until AI moderation finishes.
+					</p>
+				{:else if postBlocked}
+					<p class="mt-3 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+						This post was removed by moderation and is not visible to other users.
+					</p>
+				{/if}
 
 				{#if data.post.body}
 					<div class="prose prose-invert prose-sm max-w-none mt-4 whitespace-pre-wrap text-foreground/90">
@@ -247,6 +282,7 @@
 					</div>
 				{/if}
 
+				{#if !postBlocked}
 				<section class="mt-5 rounded-md border border-primary/30 bg-primary/5 p-4">
 					<div class="flex items-center justify-between gap-2 mb-2">
 						<div class="flex items-center gap-2 text-sm font-semibold text-primary">
@@ -275,6 +311,7 @@
 						</p>
 					{/if}
 				</section>
+				{/if}
 			</div>
 		</div>
 	</article>
@@ -307,7 +344,11 @@
 			</div>
 		</div>
 
-		{#if data.user}
+		{#if postModerationStatus !== 'approved'}
+			<p class="mb-4 rounded-lg border bg-card p-4 text-sm text-muted-foreground">
+				Discussion opens after post moderation is complete.
+			</p>
+		{:else if data.user}
 			<form method="POST" action="?/comment" use:enhance={enhanceRootComment} class="mb-4 space-y-2 rounded-lg border bg-card p-3">
 				<Textarea
 					name="body"
@@ -322,7 +363,7 @@
 				{/if}
 				<div class="flex justify-end">
 					<Button type="submit" size="sm" class="uppercase tracking-wider" disabled={rootCommentPending}>
-						<Send class="h-3.5 w-3.5" /> {rootCommentPending ? 'Moderating…' : 'Post Comment'}
+						<Send class="h-3.5 w-3.5" /> {rootCommentPending ? 'Posting…' : 'Post Comment'}
 					</Button>
 				</div>
 			</form>
@@ -433,7 +474,7 @@
 											Cancel
 										</Button>
 										<Button type="submit" size="sm" disabled={replyPendingId === c.id}>
-											<Send class="h-3.5 w-3.5" /> {replyPendingId === c.id ? 'Moderating…' : 'Reply'}
+											<Send class="h-3.5 w-3.5" /> {replyPendingId === c.id ? 'Posting…' : 'Reply'}
 										</Button>
 									</div>
 								</form>

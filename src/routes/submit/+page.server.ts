@@ -1,8 +1,8 @@
 import type { PageServerLoad, Actions } from "./$types";
 import { fail, redirect } from "@sveltejs/kit";
 import { createPost, normalizeTagsInput } from "$lib/server/posts";
-import { moderate, summarize } from "$lib/server/ai";
-import { setAiSummary } from "$lib/server/posts";
+import { localModerationBlock } from "$lib/server/ai";
+import { moderatePostInBackground, runInBackground } from "$lib/server/moderation-jobs";
 import { rateLimit } from "$lib/server/rate-limit";
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -21,8 +21,22 @@ function normalizeUrl(input: string): string | null {
   }
 }
 
+function basicPostProblem(input: {
+  title: string;
+  urlRaw: string;
+  body: string;
+  tagsRaw: string;
+}): string | null {
+  if (input.title.length < 4 || input.title.length > 200) return "title must be 4-200 characters";
+  if (/^https?:\/\//i.test(input.title)) return "title should describe the submission, not repeat the URL";
+  if (!normalizeUrl(input.urlRaw)) return "enter a valid http or https URL";
+  if (input.body && input.body.length > 20_000) return "text too long";
+  if (/(.)\1{24,}/.test(`${input.title}\n${input.body}`)) return "content looks malformed";
+  return localModerationBlock([input.title, input.body, input.tagsRaw].filter(Boolean).join("\n\n"));
+}
+
 export const actions: Actions = {
-  default: async ({ request, locals, getClientAddress }) => {
+  default: async ({ request, locals, getClientAddress, platform }) => {
     if (!locals.user) throw redirect(303, "/login");
     if (
       !rateLimit({
@@ -40,53 +54,21 @@ export const actions: Actions = {
     const body = String(form.get("body") ?? "").trim();
     const tagsRaw = String(form.get("tags") ?? "").trim();
 
-    if (title.length < 4 || title.length > 200) {
+    const basicProblem = basicPostProblem({ title, urlRaw, body, tagsRaw });
+    if (basicProblem) {
       return fail(400, {
-        message: "title must be 4–200 characters",
+        moderationStatus: "blocked",
+        message:
+          basicProblem === "profanity is not allowed"
+            ? "You cannot post that content because it contains profanity."
+            : basicProblem,
         title,
         urlRaw,
         body,
         tagsRaw,
       });
     }
-    const url = urlRaw ? normalizeUrl(urlRaw) : null;
-    if (urlRaw && !url) {
-      return fail(400, { message: "invalid URL", title, urlRaw, body, tagsRaw });
-    }
-    if (!url && !body) {
-      return fail(400, {
-        message: "provide a URL or text",
-        title,
-        urlRaw,
-        body,
-        tagsRaw,
-      });
-    }
-    if (body && body.length > 20_000) {
-      return fail(400, { message: "text too long", title, urlRaw, body, tagsRaw });
-    }
-
-    const mod = await moderate([title, url, body].filter(Boolean).join("\n\n"));
-    if (mod.status === "blocked") {
-      return fail(400, {
-        moderationStatus: mod.status,
-        message: `blocked by moderation: ${mod.reason ?? "unsafe content"}`,
-        title,
-        urlRaw,
-        body,
-        tagsRaw,
-      });
-    }
-    if (mod.status === "pending") {
-      return fail(400, {
-        moderationStatus: mod.status,
-        message: `submission needs moderation review: ${mod.reason ?? "pending review"}`,
-        title,
-        urlRaw,
-        body,
-        tagsRaw,
-      });
-    }
+    const url = normalizeUrl(urlRaw);
 
     let id;
     try {
@@ -96,6 +78,8 @@ export const actions: Actions = {
         url,
         body: body || null,
         tags: normalizeTagsInput(tagsRaw),
+        moderationStatus: "pending",
+        moderationReason: "AI moderation pending",
       });
     } catch {
       return fail(503, {
@@ -107,13 +91,9 @@ export const actions: Actions = {
       });
     }
 
-    // Best-effort background-ish summary; don't block on failure.
-    try {
-      const { summary } = await summarize({ title, body, url });
-      if (summary) await setAiSummary(id, summary);
-    } catch {
-      /* ignore */
-    }
+    runInBackground(platform, "post", () =>
+      moderatePostInBackground({ postId: id, title, body: body || null, url }),
+    );
 
     throw redirect(303, `/post/${id}`);
   },

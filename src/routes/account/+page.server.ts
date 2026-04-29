@@ -12,6 +12,6 @@ export const load: PageServerLoad = async ({ locals }) => {
   };
   return {
     user,
-    posts: await listUserPosts(user),
+    posts: await listUserPosts(user, user.id),
   };
 };

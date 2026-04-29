@@ -1,4 +1,5 @@
 import { env } from "$env/dynamic/private";
+import { Filter } from "bad-words";
 
 export type ModerationStatus = "approved" | "pending" | "blocked";
 
@@ -8,6 +9,15 @@ export type ModerationVerdict = {
   reason?: string;
   source: "local" | "ai" | "fallback";
 };
+
+const profanityFilter = new Filter();
+
+const PROFANITY_PATTERNS = [
+  /\bf+[\W_]*[u*]+[\W_]*c+[\W_]*k+(?:e[rd]?|ing)?\b/i,
+  /\bb+[\W_]*i+[\W_]*t+[\W_]*c+[\W_]*h+(?:e[sd]?|ing)?\b/i,
+  /\ba+[\W_]*s+[\W_]*s+[\W_]*h+[\W_]*o+[\W_]*l+[\W_]*e+s?\b/i,
+  /\bc+[\W_]*u+[\W_]*n+[\W_]*t+s?\b/i,
+];
 
 function providerConfig() {
   const key = env.PGX_API_KEY ?? env.OPENAI_API_KEY;
@@ -229,6 +239,12 @@ function cleanText(text: string): string {
     .replace(/https?:\/\/\S+/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function containsProfanity(text: string): boolean {
+  if (!text.trim()) return false;
+  if (profanityFilter.isProfane(text)) return true;
+  return PROFANITY_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 const URL_CONTEXT_TIMEOUT_MS = 2_500;
@@ -465,8 +481,9 @@ export async function summarize(input: {
   return { summary: streamed.fallback, source: "fallback" };
 }
 
-function localModerationBlock(text: string): string | null {
-  // Simple offline heuristic + optional AI check.
+export function localModerationBlock(text: string): string | null {
+  // Fast deterministic checks before optional AI moderation.
+  if (containsProfanity(text)) return "profanity is not allowed";
   const lower = text.toLowerCase();
   const banned = ["<script", "javascript:", "onerror=", "onclick=", "data:text/html"];
   for (const term of banned) {

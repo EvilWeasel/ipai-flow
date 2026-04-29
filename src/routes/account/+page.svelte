@@ -1,11 +1,21 @@
 <script lang="ts">
 	import Button from '$lib/components/ui/button.svelte';
+	import { invalidateAll } from '$app/navigation';
 	import { Award, LogOut, MessageSquare, ShieldCheck, User as UserIcon } from 'lucide-svelte';
 	import { hostname, tagsOf, timeAgo } from '$lib/utils';
+	import { onMount } from 'svelte';
 
 	let { data } = $props();
 
 	const initials = $derived(data.user.username.slice(0, 2).toUpperCase());
+	const hasPendingPosts = $derived(data.posts.some((post) => post.moderation_status === 'pending'));
+
+	onMount(() => {
+		const interval = window.setInterval(() => {
+			if (hasPendingPosts) void invalidateAll();
+		}, 3000);
+		return () => window.clearInterval(interval);
+	});
 </script>
 
 <div class="mx-auto max-w-2xl px-4 py-6 space-y-6">
@@ -62,6 +72,15 @@
 						<h3 class="text-[17px] font-semibold leading-snug">
 							<a href="/post/{post.id}" class="hover:text-primary transition-colors">{post.title}</a>
 						</h3>
+						{#if post.moderation_status === 'pending'}
+							<span class="mt-2 inline-flex items-center rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+								Pending AI moderation
+							</span>
+						{:else if post.moderation_status === 'blocked'}
+							<span class="mt-2 inline-flex items-center rounded bg-destructive/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-destructive">
+								Removed by moderation
+							</span>
+						{/if}
 						{#if post.url}
 							<a
 								href={post.url}
