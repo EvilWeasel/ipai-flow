@@ -12,6 +12,8 @@
 		body?: string;
 		parentId?: number | null;
 		message?: string;
+		ok?: boolean;
+		moderationStatus?: 'approved' | 'pending' | 'blocked';
 	};
 
 	let { data, form }: { data: PageData; form: CommentActionData } = $props();
@@ -33,7 +35,7 @@
 	$effect(() => {
 		if (form?.body) {
 			if (form.parentId) {
-				replyBodies[form.parentId] = form.body;
+				setReplyBody(form.parentId, form.body);
 				replyTo = form.parentId;
 			} else {
 				rootCommentBody = form.body;
@@ -121,11 +123,23 @@
 				await update({ reset: result.type === 'success' });
 				replyPendingId = null;
 				if (result.type === 'success') {
-					replyBodies[parentId] = '';
+					setReplyBody(parentId, '');
 					replyTo = null;
 				}
 			};
 		};
+	}
+
+	function userHref(username: string | undefined): string {
+		return `/user/${encodeURIComponent(username ?? 'anon')}`;
+	}
+
+	function replyBody(parentId: number): string {
+		return replyBodies[parentId] ?? '';
+	}
+
+	function setReplyBody(parentId: number, body: string) {
+		replyBodies = { ...replyBodies, [parentId]: body };
 	}
 
 	function avatarColor(name: string): string {
@@ -182,7 +196,7 @@
 							href={data.post.url}
 							target="_blank"
 							rel="noopener noreferrer"
-							class="hover:text-primary transition-colors"
+							class="underline decoration-primary/35 underline-offset-4 transition-colors hover:text-primary hover:decoration-primary"
 						>
 							{data.post.title}
 						</a>
@@ -192,8 +206,13 @@
 				</h1>
 
 				{#if data.post.url}
-					<div class="text-xs text-muted-foreground mt-1 truncate">
-						<a href={data.post.url} target="_blank" rel="noopener noreferrer" class="hover:underline">
+					<div class="mt-1 truncate text-xs">
+						<a
+							href={data.post.url}
+							target="_blank"
+							rel="noopener noreferrer"
+							class="font-medium text-primary underline decoration-primary/45 underline-offset-4 transition-colors hover:text-primary/80 hover:decoration-primary"
+						>
 							{hostname(data.post.url)}
 						</a>
 					</div>
@@ -210,7 +229,13 @@
 				{/if}
 
 				<div class="mt-2 text-xs text-muted-foreground">
-					by <span class="text-foreground/90">{data.post.username}</span>
+					by
+					<a
+						href={userHref(data.post.username)}
+						class="font-medium text-foreground/90 underline-offset-4 hover:text-primary hover:underline"
+					>
+						{data.post.username}
+					</a>
 					· {timeAgo(data.post.created_at)}
 					· {data.post.comment_count} comment{data.post.comment_count === 1 ? '' : 's'}
 				</div>
@@ -281,6 +306,31 @@
 			</div>
 		</div>
 
+		{#if data.user}
+			<form method="POST" action="?/comment" use:enhance={enhanceRootComment} class="mb-4 space-y-2 rounded-lg border bg-card p-3">
+				<Textarea
+					name="body"
+					placeholder="Add to the discussion…"
+					required
+					rows={3}
+					bind:value={rootCommentBody}
+					disabled={rootCommentPending}
+				/>
+				{#if form?.message && !form.parentId}
+					<p class="text-sm {form.ok ? 'text-primary' : 'text-destructive'}">{form.message}</p>
+				{/if}
+				<div class="flex justify-end">
+					<Button type="submit" size="sm" class="uppercase tracking-wider" disabled={rootCommentPending}>
+						<Send class="h-3.5 w-3.5" /> {rootCommentPending ? 'Moderating…' : 'Post Comment'}
+					</Button>
+				</div>
+			</form>
+		{:else}
+			<p class="mb-4 text-sm text-muted-foreground">
+				<a href="/login" class="text-primary hover:underline">Log in</a> to join the discussion.
+			</p>
+		{/if}
+
 		{#if tree.length === 0}
 			<p class="text-sm text-muted-foreground py-4">No comments yet — start the discussion.</p>
 		{:else}
@@ -288,6 +338,7 @@
 				{@const isAuthor = c.user_id === data.post.user_id}
 				{@const username = c.username ?? 'anon'}
 				{@const initials = username.slice(0, 2).toUpperCase()}
+				{@const isPending = c.moderation_status === 'pending'}
 				<div class={depth > 0 ? 'mt-3 border-l border-border pl-4' : 'mt-3'}>
 					<div class="flex items-start gap-3">
 						<div class="h-8 w-8 rounded-full flex items-center justify-center text-[10px] font-semibold {avatarColor(username)} shrink-0">
@@ -295,10 +346,20 @@
 						</div>
 						<div class="flex-1 min-w-0">
 							<div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
-								<span class="font-semibold text-foreground">{username}</span>
+								<a
+									href={userHref(username)}
+									class="font-semibold text-foreground underline-offset-4 hover:text-primary hover:underline"
+								>
+									{username}
+								</a>
 								{#if isAuthor}
 									<span class="inline-flex items-center rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary uppercase tracking-wider">
 										OP
+									</span>
+								{/if}
+								{#if isPending}
+									<span class="inline-flex items-center rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 uppercase tracking-wider">
+										Pending AI moderation
 									</span>
 								{/if}
 								<span class="text-muted-foreground tabular-nums">· {c.score}</span>
@@ -306,26 +367,30 @@
 							</div>
 							<p class="text-sm mt-1 whitespace-pre-wrap text-foreground/90">{c.body}</p>
 							<div class="mt-1.5 flex items-center gap-4 text-xs text-muted-foreground">
-								<form method="POST" action="?/vote" use:enhance>
-									<input type="hidden" name="kind" value="comment" />
-									<input type="hidden" name="id" value={c.id} />
-									<input
-										type="hidden"
-										name="value"
-										value={c.user_vote === 1 ? 0 : 1}
-									/>
-									<button
-										type="submit"
-										class="inline-flex items-center gap-1 hover:text-primary {c.user_vote === 1
-											? 'text-primary'
-											: ''}"
-										aria-label="Upvote comment"
-									>
-										<ChevronUp class="h-3.5 w-3.5" strokeWidth={2.4} />
-										Upvote
-									</button>
-								</form>
-								{#if data.user}
+								{#if isPending}
+									<span>Visible only to you until moderation finishes.</span>
+								{:else}
+									<form method="POST" action="?/vote" use:enhance>
+										<input type="hidden" name="kind" value="comment" />
+										<input type="hidden" name="id" value={c.id} />
+										<input
+											type="hidden"
+											name="value"
+											value={c.user_vote === 1 ? 0 : 1}
+										/>
+										<button
+											type="submit"
+											class="inline-flex items-center gap-1 hover:text-primary {c.user_vote === 1
+												? 'text-primary'
+												: ''}"
+											aria-label="Upvote comment"
+										>
+											<ChevronUp class="h-3.5 w-3.5" strokeWidth={2.4} />
+											Upvote
+										</button>
+									</form>
+								{/if}
+								{#if data.user && !isPending}
 									<button
 										type="button"
 										class="inline-flex items-center gap-1 hover:text-foreground"
@@ -349,11 +414,12 @@
 										placeholder="Write a reply…"
 										required
 										rows={3}
-										bind:value={replyBodies[c.id]}
+										value={replyBody(c.id)}
+										oninput={(event) => setReplyBody(c.id, event.currentTarget.value)}
 										disabled={replyPendingId === c.id}
 									/>
 									{#if form?.message && form.parentId === c.id}
-										<p class="text-sm text-destructive">{form.message}</p>
+										<p class="text-sm {form.ok ? 'text-primary' : 'text-destructive'}">{form.message}</p>
 									{/if}
 									<div class="flex justify-end gap-2">
 										<Button
@@ -366,7 +432,7 @@
 											Cancel
 										</Button>
 										<Button type="submit" size="sm" disabled={replyPendingId === c.id}>
-											<Send class="h-3.5 w-3.5" /> {replyPendingId === c.id ? 'Posting…' : 'Reply'}
+											<Send class="h-3.5 w-3.5" /> {replyPendingId === c.id ? 'Moderating…' : 'Reply'}
 										</Button>
 									</div>
 								</form>
@@ -385,31 +451,6 @@
 					{@render renderComment(root, 0)}
 				{/each}
 			</div>
-		{/if}
-
-		{#if data.user}
-			<form method="POST" action="?/comment" use:enhance={enhanceRootComment} class="mt-6 space-y-2 rounded-lg border bg-card p-3">
-				<Textarea
-					name="body"
-					placeholder="Add to the discussion…"
-					required
-					rows={3}
-					bind:value={rootCommentBody}
-					disabled={rootCommentPending}
-				/>
-				{#if form?.message && !form.parentId}
-					<p class="text-sm text-destructive">{form.message}</p>
-				{/if}
-				<div class="flex justify-end">
-					<Button type="submit" size="sm" class="uppercase tracking-wider" disabled={rootCommentPending}>
-						<Send class="h-3.5 w-3.5" /> {rootCommentPending ? 'Posting…' : 'Post Comment'}
-					</Button>
-				</div>
-			</form>
-		{:else}
-			<p class="text-sm text-muted-foreground mt-4">
-				<a href="/login" class="text-primary hover:underline">Log in</a> to join the discussion.
-			</p>
 		{/if}
 	</section>
 </div>

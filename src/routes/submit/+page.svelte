@@ -112,11 +112,16 @@
 			<p class="text-sm text-destructive" role="alert">{formData.message}</p>
 		{/if}
 
-		<div class="flex justify-end gap-2 pt-1">
+		<div class="flex flex-wrap items-center justify-between gap-3 pt-1">
+			<p class="text-xs text-muted-foreground">
+				Posts are checked with AI moderation before they appear.
+			</p>
+			<div class="flex justify-end gap-2">
 			<Button href="/" variant="ghost" aria-disabled={pending}>Cancel</Button>
 			<Button type="submit" class="uppercase tracking-wider" disabled={pending}>
-				{pending ? 'Submitting…' : 'Submit Post'}
+				{pending ? 'Moderating…' : 'Submit Post'}
 			</Button>
+			</div>
 		</div>
 	</form>
 

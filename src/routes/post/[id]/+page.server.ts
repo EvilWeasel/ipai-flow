@@ -45,15 +45,24 @@ export const actions: Actions = {
       });
     }
     const mod = await moderate(body);
-    if (!mod.ok) {
+    if (mod.status === "blocked") {
       return fail(400, {
+        ok: false,
+        moderationStatus: mod.status,
         message: `blocked by moderation: ${mod.reason ?? "unsafe"}`,
         body,
         parentId,
       });
     }
     try {
-      await createComment({ userId: locals.user.id, postId: id, parentId, body });
+      await createComment({
+        userId: locals.user.id,
+        postId: id,
+        parentId,
+        body,
+        moderationStatus: mod.status,
+        moderationReason: mod.reason ?? null,
+      });
     } catch {
       return fail(503, {
         message: "comment unavailable right now",
@@ -61,7 +70,14 @@ export const actions: Actions = {
         parentId,
       });
     }
-    return { ok: true };
+    return {
+      ok: true,
+      moderationStatus: mod.status,
+      message:
+        mod.status === "pending"
+          ? "Comment saved and pending moderation."
+          : "Comment posted after AI moderation.",
+    };
   },
   vote: async ({ request, locals, getClientAddress }) => {
     if (!locals.user) throw redirect(303, "/login");

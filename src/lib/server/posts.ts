@@ -1,4 +1,5 @@
 import { now, rankScore, supabase, type Comment, type Post } from "./db";
+import type { ModerationStatus } from "./ai";
 
 type PostRow = {
   id: number;
@@ -23,6 +24,8 @@ type CommentRow = {
   body: string;
   created_at: number;
   score: number;
+  moderation_status?: ModerationStatus | null;
+  moderation_reason?: string | null;
   users?: UserRelation | null;
 };
 
@@ -61,9 +64,19 @@ function mapComment(row: CommentRow, userVote?: number | null): Comment {
     body: row.body,
     created_at: row.created_at,
     score: row.score,
+    moderation_status: row.moderation_status ?? "approved",
+    moderation_reason: row.moderation_reason ?? null,
     username: relationUsername(row.users, row.user_id),
     user_vote: userVote ?? undefined,
   };
+}
+
+function isMissingModerationColumn(error: { message?: string; code?: string } | null | undefined): boolean {
+  const message = error?.message?.toLowerCase() ?? "";
+  return (
+    error?.code === "PGRST204" ||
+    (message.includes("moderation_status") && message.includes("column"))
+  );
 }
 
 export async function listPosts(
@@ -136,15 +149,44 @@ export async function getPost(id: number, userId = 0): Promise<Post | null> {
 }
 
 export async function getComments(postId: number, userId = 0): Promise<Comment[]> {
-  const { data, error } = await supabase
+  let query = supabase
     .from("comments")
-    .select("id, post_id, user_id, parent_id, body, created_at, score, users(username)")
+    .select(
+      "id, post_id, user_id, parent_id, body, created_at, score, moderation_status, moderation_reason, users(username)",
+    )
     .eq("post_id", postId)
     .order("created_at", { ascending: true });
+
+  if (userId > 0) {
+    query = query.or(`moderation_status.eq.approved,and(moderation_status.eq.pending,user_id.eq.${userId})`);
+  } else {
+    query = query.eq("moderation_status", "approved");
+  }
+
+  const { data, error } = await query;
+  if (isMissingModerationColumn(error)) {
+    const { data: legacyData, error: legacyError } = await supabase
+      .from("comments")
+      .select("id, post_id, user_id, parent_id, body, created_at, score, users(username)")
+      .eq("post_id", postId)
+      .order("created_at", { ascending: true });
+    if (legacyError) throw new Error(`Failed to load comments: ${legacyError.message}`);
+    return loadCommentVotes(
+      ((legacyData ?? []) as CommentRow[]).map((row) =>
+        mapComment({ ...row, moderation_status: "approved" }),
+      ),
+      userId,
+    );
+  }
   if (error) throw new Error(`Failed to load comments: ${error.message}`);
   const comments = ((data ?? []) as CommentRow[]).map((row) => mapComment(row));
-  if (userId > 0 && comments.length > 0) {
-    const ids = comments.map((c) => c.id);
+  return loadCommentVotes(comments, userId);
+}
+
+async function loadCommentVotes(comments: Comment[], userId: number): Promise<Comment[]> {
+  const votableComments = comments.filter((c) => c.moderation_status === "approved");
+  if (userId > 0 && votableComments.length > 0) {
+    const ids = votableComments.map((c) => c.id);
     const { data: voteRows, error: voteError } = await supabase
       .from("votes")
       .select("target_id, value")
@@ -156,7 +198,7 @@ export async function getComments(postId: number, userId = 0): Promise<Comment[]
     }
     const voteMap = new Map<number, number>();
     for (const row of voteRows ?? []) voteMap.set(row.target_id as number, row.value as number);
-    for (const comment of comments) comment.user_vote = voteMap.get(comment.id);
+    for (const comment of votableComments) comment.user_vote = voteMap.get(comment.id);
   }
   return comments;
 }
@@ -217,8 +259,67 @@ export async function createComment(input: {
   postId: number;
   parentId: number | null;
   body: string;
+  moderationStatus?: ModerationStatus;
+  moderationReason?: string | null;
 }): Promise<number> {
   const createdAt = now();
+  const moderationStatus = input.moderationStatus ?? "approved";
+  const { data, error } = await supabase
+    .from("comments")
+    .insert({
+      post_id: input.postId,
+      user_id: input.userId,
+      parent_id: input.parentId,
+      body: input.body,
+      created_at: createdAt,
+      score: moderationStatus === "approved" ? 1 : 0,
+      moderation_status: moderationStatus,
+      moderation_reason: input.moderationReason ?? null,
+    })
+    .select("id")
+    .single();
+  if (isMissingModerationColumn(error) && moderationStatus === "approved") {
+    return createLegacyApprovedComment(input, createdAt);
+  }
+  if (error) throw new Error(`Failed to create comment: ${error.message}`);
+  const id = data.id as number;
+
+  if (moderationStatus !== "approved") return id;
+
+  const { data: postRow, error: postError } = await supabase
+    .from("posts")
+    .select("comment_count")
+    .eq("id", input.postId)
+    .single();
+  if (postError) throw new Error(`Failed to load comment_count: ${postError.message}`);
+  const { error: postUpdateError } = await supabase
+    .from("posts")
+    .update({ comment_count: (postRow.comment_count as number) + 1 })
+    .eq("id", input.postId);
+  if (postUpdateError) {
+    throw new Error(`Failed to update comment_count: ${postUpdateError.message}`);
+  }
+
+  const { error: voteError } = await supabase.from("votes").insert({
+    user_id: input.userId,
+    target_kind: "comment",
+    target_id: id,
+    value: 1,
+    created_at: createdAt,
+  });
+  if (voteError) throw new Error(`Failed to create initial comment vote: ${voteError.message}`);
+  return id;
+}
+
+async function createLegacyApprovedComment(
+  input: {
+    userId: number;
+    postId: number;
+    parentId: number | null;
+    body: string;
+  },
+  createdAt: number,
+): Promise<number> {
   const { data, error } = await supabase
     .from("comments")
     .insert({
@@ -265,6 +366,22 @@ export async function vote(input: {
   targetId: number;
   value: 1 | -1 | 0;
 }): Promise<void> {
+  if (input.kind === "comment") {
+    const { data: commentRow, error: commentError } = await supabase
+      .from("comments")
+      .select("moderation_status")
+      .eq("id", input.targetId)
+      .single();
+    if (isMissingModerationColumn(commentError)) {
+      // Existing deployments without the moderation columns only contain public comments.
+    } else {
+    if (commentError) throw new Error(`Failed to load comment moderation: ${commentError.message}`);
+    if ((commentRow.moderation_status as ModerationStatus | undefined) !== "approved") {
+      throw new Error("Cannot vote on a comment pending moderation");
+    }
+    }
+  }
+
   const { data: existing, error: existingError } = await supabase
     .from("votes")
     .select("value")

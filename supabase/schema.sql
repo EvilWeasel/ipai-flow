@@ -44,10 +44,35 @@ create table if not exists public.comments (
   parent_id bigint references public.comments(id) on delete cascade,
   body text not null,
   created_at integer not null,
-  score integer not null default 1
+  score integer not null default 1,
+  moderation_status text not null default 'approved'
+    constraint comments_moderation_status_check
+    check (moderation_status in ('approved', 'pending', 'blocked')),
+  moderation_reason text
 );
 
+alter table public.comments
+  add column if not exists moderation_status text not null default 'approved';
+alter table public.comments
+  add column if not exists moderation_reason text;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'comments_moderation_status_check'
+      and conrelid = 'public.comments'::regclass
+  ) then
+    alter table public.comments
+      add constraint comments_moderation_status_check
+      check (moderation_status in ('approved', 'pending', 'blocked'));
+  end if;
+end $$;
+
 create index if not exists idx_comments_post on public.comments(post_id);
+create index if not exists idx_comments_post_moderation
+  on public.comments(post_id, moderation_status, created_at);
 
 create table if not exists public.votes (
   user_id bigint not null references public.users(id) on delete cascade,

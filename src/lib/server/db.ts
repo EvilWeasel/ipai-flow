@@ -46,6 +46,8 @@ export type Comment = {
   body: string;
   created_at: number;
   score: number;
+  moderation_status?: "approved" | "pending" | "blocked";
+  moderation_reason?: string | null;
   username?: string;
   user_vote?: number;
 };

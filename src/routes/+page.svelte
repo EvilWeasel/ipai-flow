@@ -30,6 +30,8 @@
 
 		return { lastDay, activeDiscussions, topTags };
 	});
+
+	const userHref = (username: string | undefined) => `/user/${encodeURIComponent(username ?? 'anon')}`;
 </script>
 
 <div class="mx-auto max-w-3xl px-4 pt-2 pb-4">
@@ -112,10 +114,15 @@
 							</h2>
 
 							{#if post.url}
-								<div class="text-xs text-muted-foreground mt-1 truncate">
-									(<a href={post.url} target="_blank" rel="noopener noreferrer" class="hover:underline">
+								<div class="mt-1 truncate text-xs">
+									<a
+										href={post.url}
+										target="_blank"
+										rel="noopener noreferrer"
+										class="font-medium text-primary underline decoration-primary/45 underline-offset-4 transition-colors hover:text-primary/80 hover:decoration-primary"
+									>
 										{hostname(post.url)}
-									</a>)
+									</a>
 								</div>
 							{/if}
 
@@ -130,7 +137,15 @@
 							{/if}
 
 							<div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-								<span>by <span class="text-foreground/90">{post.username}</span></span>
+								<span>
+									by
+									<a
+										href={userHref(post.username)}
+										class="font-medium text-foreground/90 underline-offset-4 hover:text-primary hover:underline"
+									>
+										{post.username}
+									</a>
+								</span>
 								<span>·</span>
 								<span>{timeAgo(post.created_at)}</span>
 								<a

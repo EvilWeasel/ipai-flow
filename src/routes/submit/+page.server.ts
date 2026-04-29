@@ -66,10 +66,21 @@ export const actions: Actions = {
       return fail(400, { message: "text too long", title, urlRaw, body, tagsRaw });
     }
 
-    const mod = await moderate([title, body].filter(Boolean).join("\n\n"));
-    if (!mod.ok) {
+    const mod = await moderate([title, url, body].filter(Boolean).join("\n\n"));
+    if (mod.status === "blocked") {
       return fail(400, {
+        moderationStatus: mod.status,
         message: `blocked by moderation: ${mod.reason ?? "unsafe content"}`,
+        title,
+        urlRaw,
+        body,
+        tagsRaw,
+      });
+    }
+    if (mod.status === "pending") {
+      return fail(400, {
+        moderationStatus: mod.status,
+        message: `submission needs moderation review: ${mod.reason ?? "pending review"}`,
         title,
         urlRaw,
         body,

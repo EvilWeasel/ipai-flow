@@ -2,6 +2,15 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { env } from "$env/dynamic/private";
 import { streamText } from "ai";
 
+export type ModerationStatus = "approved" | "pending" | "blocked";
+
+export type ModerationVerdict = {
+  ok: boolean;
+  status: ModerationStatus;
+  reason?: string;
+  source: "local" | "ai" | "fallback";
+};
+
 function providerConfig() {
   const key = env.PGX_API_KEY ?? env.OPENAI_API_KEY;
   if (!key) return null;
@@ -82,6 +91,104 @@ function cleanText(text: string): string {
     .trim();
 }
 
+const URL_CONTEXT_TIMEOUT_MS = 2_500;
+const URL_CONTEXT_MAX_BYTES = 120_000;
+const URL_CONTEXT_MAX_CHARS = 4_000;
+
+function safeHttpUrl(url: string | null | undefined): URL | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ")
+    .replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function readResponseText(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (total < URL_CONTEXT_MAX_BYTES) {
+    const { value, done } = await reader.read();
+    if (done || !value) break;
+    const remaining = URL_CONTEXT_MAX_BYTES - total;
+    chunks.push(value.byteLength > remaining ? value.slice(0, remaining) : value);
+    total += Math.min(value.byteLength, remaining);
+  }
+  try {
+    await reader.cancel();
+  } catch {
+    /* ignore */
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+}
+
+export async function fetchUrlContext(url: string | null | undefined): Promise<string | null> {
+  const safeUrl = safeHttpUrl(url);
+  if (!safeUrl) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), URL_CONTEXT_TIMEOUT_MS);
+  try {
+    const response = await fetch(safeUrl, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        accept: "text/html,text/plain;q=0.9,*/*;q=0.1",
+        "user-agent": "IPAIFlowBot/1.0 (+https://ipaiflow.local)",
+      },
+    });
+    if (!response.ok) return null;
+
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    if (
+      contentType &&
+      !contentType.includes("text/html") &&
+      !contentType.includes("text/plain") &&
+      !contentType.includes("application/xhtml+xml")
+    ) {
+      return null;
+    }
+
+    const raw = await readResponseText(response);
+    const text = contentType.includes("text/plain") ? raw : htmlToPlainText(raw);
+    const clean = cleanText(text);
+    return clean ? clean.slice(0, URL_CONTEXT_MAX_CHARS) : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function truncateSentence(text: string, max = 180): string {
   const clean = cleanText(text);
   if (clean.length <= max) return clean;
@@ -102,11 +209,14 @@ function fallbackSummary(input: {
   title: string;
   body?: string | null;
   url?: string | null;
+  urlContext?: string | null;
 }): string {
   const title = truncateSentence(input.title, 120);
   const body = cleanText(input.body ?? "");
+  const urlContext = cleanText(input.urlContext ?? "");
   const host = hostname(input.url);
-  const firstSentence = body.match(/[^.!?]+[.!?]+/)?.[0] ?? body;
+  const contextText = body || urlContext;
+  const firstSentence = contextText.match(/[^.!?]+[.!?]+/)?.[0] ?? contextText;
 
   if (firstSentence) {
     const context = truncateSentence(firstSentence, 190).replace(/[.!?]?$/, ".");
@@ -141,11 +251,12 @@ function summaryInput(input: {
   title: string;
   body?: string | null;
   url?: string | null;
+  urlContext?: string | null;
 }): { prompt: string } {
   return {
     prompt: `Title: ${input.title}\n\n${input.body ?? "(link post)"}${
       input.url ? `\nURL: ${input.url}` : ""
-    }`,
+    }${input.urlContext ? `\n\nFetched URL context:\n${input.urlContext}` : ""}`,
   };
 }
 
@@ -153,11 +264,20 @@ export function streamSummary(input: {
   title: string;
   body?: string | null;
   url?: string | null;
+  urlContext?: string | null;
 }): {
   textStream: AsyncIterable<string>;
   fallback: string;
   source: "ai" | "fallback";
 } {
+  if (input.url && input.urlContext === undefined) {
+    return {
+      textStream: streamSummaryWithFetchedContext(input),
+      fallback: fallbackSummary(input),
+      source: providerConfig() ? "ai" : "fallback",
+    };
+  }
+
   const { prompt } = summaryInput(input);
   const fallback = fallbackSummary(input);
   const ai = streamAIText(
@@ -182,40 +302,73 @@ export function streamSummary(input: {
   };
 }
 
+async function* streamSummaryWithFetchedContext(input: {
+  title: string;
+  body?: string | null;
+  url?: string | null;
+}): AsyncIterable<string> {
+  const urlContext = await fetchUrlContext(input.url);
+  const streamed = streamSummary({ ...input, urlContext });
+  yield* streamed.textStream;
+}
+
 export async function summarize(input: {
   title: string;
   body?: string | null;
   url?: string | null;
 }): Promise<{ summary: string; source: "ai" | "fallback" }> {
-  const streamed = streamSummary(input);
+  const urlContext = await fetchUrlContext(input.url);
+  const streamed = streamSummary({ ...input, urlContext });
   const summary = await readTextStream(streamed.textStream);
   if (summary) return { summary, source: streamed.source };
   logAIDecision("fallback", { purpose: "summary", reason: "empty-stream" });
   return { summary: streamed.fallback, source: "fallback" };
 }
 
-export async function moderate(
-  text: string,
-): Promise<{ ok: boolean; reason?: string }> {
+function localModerationBlock(text: string): string | null {
   // Simple offline heuristic + optional AI check.
   const lower = text.toLowerCase();
-  const banned = ["<script", "javascript:", "onerror="];
+  const banned = ["<script", "javascript:", "onerror=", "onclick=", "data:text/html"];
   for (const term of banned) {
-    if (lower.includes(term)) return { ok: false, reason: "unsafe content" };
+    if (lower.includes(term)) return "unsafe content";
   }
-  if (text.length > 20_000) return { ok: false, reason: "too long" };
+  if (text.length > 20_000) return "too long";
+  return null;
+}
+
+export async function moderate(text: string): Promise<ModerationVerdict> {
+  const localBlock = localModerationBlock(text);
+  if (localBlock) {
+    return { ok: false, status: "blocked", reason: localBlock, source: "local" };
+  }
+
   const ai = streamAIText(
-    'You moderate forum posts. Reply with exactly "OK" if the content is acceptable for a professional community, or "BLOCK: <short reason>" if it contains harassment, hate speech, illegal content, or spam.',
+    'You moderate forum posts and comments for a professional community. Reply with exactly one of: "APPROVED", "PENDING: <short reason>", or "BLOCKED: <short reason>". Block harassment, hate speech, illegal content, exploit payloads, and spam. Use pending only when the content needs human review but is not clearly blockable.',
     text.slice(0, 4000),
     60,
     "moderation",
   );
   const moderation = ai ? await readTextStream(ai.textStream) : null;
-  if (moderation && moderation.toUpperCase().startsWith("BLOCK")) {
+  if (!moderation) {
+    return { ok: true, status: "approved", source: "fallback" };
+  }
+
+  const normalized = moderation.trim();
+  if (/^BLOCK(?:ED)?\b/i.test(normalized)) {
     return {
       ok: false,
-      reason: moderation.replace(/^BLOCK:?\s*/i, "").trim() || "blocked",
+      status: "blocked",
+      reason: normalized.replace(/^BLOCK(?:ED)?:?\s*/i, "").trim() || "blocked",
+      source: "ai",
     };
   }
-  return { ok: true };
+  if (/^PENDING\b/i.test(normalized)) {
+    return {
+      ok: true,
+      status: "pending",
+      reason: normalized.replace(/^PENDING:?\s*/i, "").trim() || "needs review",
+      source: "ai",
+    };
+  }
+  return { ok: true, status: "approved", source: "ai" };
 }
