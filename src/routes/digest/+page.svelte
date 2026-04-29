@@ -1,14 +1,14 @@
 <script lang="ts">
 	import Button from '$lib/components/ui/button.svelte';
-	import { ChevronUp, MessageSquare, Sliders, Sparkles } from 'lucide-svelte';
+	import { ChevronUp, MessageSquare, Sparkles } from 'lucide-svelte';
 	import { hostname, tagsOf, timeAgo } from '$lib/utils';
 
 	let { data } = $props();
 
 	function rangeLabel(hours: number): string {
-		if (hours <= 24) return `last ${hours} hours`;
-		if (hours <= 24 * 7) return `last ${Math.round(hours / 24)} days`;
-		return `last ${Math.round(hours / (24 * 7))} weeks`;
+		if (hours === 24) return 'last 24 hours';
+		if (hours === 24 * 7) return 'last 7 days';
+		return 'last 30 days';
 	}
 </script>
 
@@ -20,12 +20,23 @@
 		<h1 class="text-3xl font-bold leading-tight">
 			Top stories from the {rangeLabel(data.hours)}
 		</h1>
+		<nav class="flex flex-wrap gap-2 pt-2" aria-label="Digest windows">
+			{#each data.windows as hours}
+				<a
+					href="/digest?hours={hours}"
+					aria-current={data.hours === hours ? 'page' : undefined}
+					class="rounded-md border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors {data.hours === hours ? 'border-primary bg-primary/15 text-primary' : 'border-border text-muted-foreground hover:text-foreground'}"
+				>
+					{rangeLabel(hours)}
+				</a>
+			{/each}
+		</nav>
 	</header>
 
 	{#if data.intro}
 		<section class="rounded-lg border border-primary/30 bg-primary/5 p-4">
 			<div class="flex items-center gap-2 mb-2 text-sm font-semibold text-primary">
-				<Sparkles class="h-4 w-4" /> AI Overview Synthesis
+				<Sparkles class="h-4 w-4" /> Community Signal
 			</div>
 			<p class="text-sm leading-relaxed text-foreground/90 whitespace-pre-wrap">{data.intro}</p>
 		</section>
@@ -46,15 +57,53 @@
 		</section>
 	{/if}
 
+	{#if !data.dbError && data.posts.length > 0}
+		<div class="grid gap-4 md:grid-cols-2">
+			<section class="rounded-lg border bg-card p-4">
+				<h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+					Most Discussed
+				</h2>
+				<ol class="space-y-3">
+					{#each data.mostDiscussed as post}
+						<li class="min-w-0">
+							<a href="/post/{post.id}" class="block truncate text-sm font-semibold hover:text-primary">
+								{post.title}
+							</a>
+							<div class="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+								<MessageSquare class="h-3.5 w-3.5" />
+								<span>{post.comment_count} comments</span>
+								<span>by {post.username}</span>
+							</div>
+						</li>
+					{/each}
+				</ol>
+			</section>
+
+			<section class="rounded-lg border bg-card p-4">
+				<h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+					Highest Signal
+				</h2>
+				<ol class="space-y-3">
+					{#each data.highestSignal as post}
+						<li class="min-w-0">
+							<a href="/post/{post.id}" class="block truncate text-sm font-semibold hover:text-primary">
+								{post.title}
+							</a>
+							<div class="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+								<ChevronUp class="h-3.5 w-3.5" />
+								<span>{post.score} points</span>
+								<span>by {post.username}</span>
+							</div>
+						</li>
+					{/each}
+				</ol>
+			</section>
+		</div>
+	{/if}
+
 	<section>
 		<div class="flex items-center justify-between mb-3">
-			<h2 class="text-lg font-semibold">Highest Signal Discussions</h2>
-			<button
-				type="button"
-				class="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-			>
-				<Sliders class="h-3.5 w-3.5" /> Filter
-			</button>
+			<h2 class="text-lg font-semibold">Digest Feed</h2>
 		</div>
 
 		{#if data.dbError}

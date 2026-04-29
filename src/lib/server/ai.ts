@@ -18,6 +18,7 @@ function providerConfig() {
     key,
     model,
     baseURL: normalizeOpenAIBaseURL(rawBaseURL),
+    provider: usesPgx ? "pgx" : "openai",
   };
 }
 
@@ -29,10 +30,26 @@ function normalizeOpenAIBaseURL(rawBaseURL?: string) {
     .replace(/\/chat\/completions$/, "");
 }
 
-function streamAIText(system: string, user: string, max = 300) {
+function logAIDecision(
+  event: "provider" | "fallback",
+  details: Record<string, string | number | boolean | undefined>,
+) {
+  console.info("[ai]", event, details);
+}
+
+function streamAIText(system: string, user: string, max = 300, purpose = "completion") {
   const config = providerConfig();
-  if (!config) return null;
+  if (!config) {
+    logAIDecision("fallback", { purpose, reason: "no-provider-config" });
+    return null;
+  }
   try {
+    logAIDecision("provider", {
+      purpose,
+      provider: config.provider,
+      model: config.model,
+      baseURL: config.baseURL ? "custom" : "default",
+    });
     const openai = createOpenAI({
       apiKey: config.key,
       ...(config.baseURL ? { baseURL: config.baseURL } : {}),
@@ -45,20 +62,63 @@ function streamAIText(system: string, user: string, max = 300) {
       maxOutputTokens: max,
       maxRetries: 1,
       timeout: {
-        totalMs: 20_000,
-        chunkMs: 10_000,
+        totalMs: 4_000,
+        chunkMs: 2_000,
       },
     });
-  } catch {
+  } catch (err) {
+    logAIDecision("fallback", {
+      purpose,
+      reason: err instanceof Error ? err.message : "provider-init-failed",
+    });
     return null;
   }
 }
 
-function fallbackSummary(text: string, maxSentences = 3): string {
-  const clean = text.replace(/\s+/g, " ").trim();
-  if (!clean) return "";
-  const sentences = clean.match(/[^.!?]+[.!?]+/g) ?? [clean];
-  return sentences.slice(0, maxSentences).join(" ").trim();
+function cleanText(text: string): string {
+  return text
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function truncateSentence(text: string, max = 180): string {
+  const clean = cleanText(text);
+  if (clean.length <= max) return clean;
+  const clipped = clean.slice(0, max).replace(/\s+\S*$/, "").trim();
+  return `${clipped}...`;
+}
+
+function hostname(url: string | null | undefined): string {
+  if (!url) return "";
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function fallbackSummary(input: {
+  title: string;
+  body?: string | null;
+  url?: string | null;
+}): string {
+  const title = truncateSentence(input.title, 120);
+  const body = cleanText(input.body ?? "");
+  const host = hostname(input.url);
+  const firstSentence = body.match(/[^.!?]+[.!?]+/)?.[0] ?? body;
+
+  if (firstSentence) {
+    const context = truncateSentence(firstSentence, 190).replace(/[.!?]?$/, ".");
+    const source = host ? ` The linked source is ${host}.` : "";
+    return `This discussion centers on "${title}" and highlights ${context.charAt(0).toLowerCase()}${context.slice(1)}${source}`;
+  }
+
+  if (host) {
+    return `This link post points IPAI Flow members to ${host} for "${title}", giving the community a concrete item to evaluate and discuss.`;
+  }
+
+  return `This post opens a focused IPAI Flow discussion on "${title}", giving members a clear topic for follow-up and shared context.`;
 }
 
 async function readTextStream(
@@ -81,9 +141,8 @@ function summaryInput(input: {
   title: string;
   body?: string | null;
   url?: string | null;
-}): { sourceText: string; prompt: string } {
+}): { prompt: string } {
   return {
-    sourceText: [input.title, input.body, input.url].filter(Boolean).join("\n\n"),
     prompt: `Title: ${input.title}\n\n${input.body ?? "(link post)"}${
       input.url ? `\nURL: ${input.url}` : ""
     }`,
@@ -99,12 +158,13 @@ export function streamSummary(input: {
   fallback: string;
   source: "ai" | "fallback";
 } {
-  const { sourceText, prompt } = summaryInput(input);
-  const fallback = fallbackSummary(sourceText);
+  const { prompt } = summaryInput(input);
+  const fallback = fallbackSummary(input);
   const ai = streamAIText(
     "You summarise community forum posts for the IPAI Flow platform. Write 2-3 concise sentences in neutral, factual English. No emojis, no marketing language.",
     prompt,
     200,
+    "summary",
   );
 
   if (!ai) {
@@ -130,6 +190,7 @@ export async function summarize(input: {
   const streamed = streamSummary(input);
   const summary = await readTextStream(streamed.textStream);
   if (summary) return { summary, source: streamed.source };
+  logAIDecision("fallback", { purpose: "summary", reason: "empty-stream" });
   return { summary: streamed.fallback, source: "fallback" };
 }
 
@@ -147,6 +208,7 @@ export async function moderate(
     'You moderate forum posts. Reply with exactly "OK" if the content is acceptable for a professional community, or "BLOCK: <short reason>" if it contains harassment, hate speech, illegal content, or spam.',
     text.slice(0, 4000),
     60,
+    "moderation",
   );
   const moderation = ai ? await readTextStream(ai.textStream) : null;
   if (moderation && moderation.toUpperCase().startsWith("BLOCK")) {

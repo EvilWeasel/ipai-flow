@@ -12,9 +12,40 @@
 		{ id: 'top', label: 'Top', href: '/?sort=top' },
 		{ id: 'digest', label: 'Digest', href: '/digest' }
 	] as const;
+
+	const feedSignal = $derived.by(() => {
+		const now = Math.floor(Date.now() / 1000);
+		const lastDay = data.posts.filter((post) => now - post.created_at <= 86400).length;
+		const activeDiscussions = data.posts.reduce((sum, post) => sum + post.comment_count, 0);
+		const tagCounts = new Map<string, number>();
+		for (const post of data.posts) {
+			for (const tag of tagsOf(post.tags)) {
+				tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+			}
+		}
+		const topTags = [...tagCounts.entries()]
+			.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+			.slice(0, 3)
+			.map(([tag]) => tag);
+
+		return { lastDay, activeDiscussions, topTags };
+	});
 </script>
 
 <div class="mx-auto max-w-3xl px-4 pt-2 pb-4">
+	<div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border py-3 text-xs text-muted-foreground">
+		<div>
+			<span class="font-semibold text-foreground">IPAI Flow</span>
+			<span class="ml-2">community signal</span>
+		</div>
+		<div class="flex flex-wrap items-center gap-x-3 gap-y-1 tabular-nums">
+			<span>{feedSignal.lastDay} post{feedSignal.lastDay === 1 ? '' : 's'} in 24h</span>
+			<span>{feedSignal.activeDiscussions} comment{feedSignal.activeDiscussions === 1 ? '' : 's'}</span>
+			{#if feedSignal.topTags.length > 0}
+				<span>{feedSignal.topTags.map((tag) => `#${tag}`).join(' ')}</span>
+			{/if}
+		</div>
+	</div>
 	<nav class="flex items-center gap-6 border-b border-border">
 		{#each tabs as t (t.id)}
 			{@const active = t.id !== 'digest' && data.sort === t.id}

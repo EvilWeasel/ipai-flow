@@ -1,7 +1,7 @@
 <script lang="ts">
 	import './layout.css';
 	import { page } from '$app/state';
-	import { MessageSquare, PlusSquare, Search, User } from 'lucide-svelte';
+	import { MessageSquare, PlusSquare, User } from 'lucide-svelte';
 	import type { LayoutData } from './$types';
 
 	let { children, data }: { children: import('svelte').Snippet; data: LayoutData } = $props();
@@ -14,7 +14,7 @@
 </script>
 
 <svelte:head>
-	<title>IPAI Community</title>
+	<title>IPAI Flow</title>
 	<meta name="description" content="A discussion platform for the IPAI community." />
 </svelte:head>
 
@@ -43,17 +43,8 @@
 						<line x1="12" y1="12" x2="17.8" y2="17.8" />
 					</svg>
 				</span>
-				<span class="text-primary text-[15px]">IPAI Community</span>
+				<span class="text-primary text-[15px]">IPAI Flow</span>
 			</a>
-			<div class="ml-auto flex items-center gap-1">
-				<button
-					type="button"
-					aria-label="Search"
-					class="inline-flex h-9 w-9 items-center justify-center rounded-md text-primary hover:bg-muted transition-colors"
-				>
-					<Search class="h-5 w-5" />
-				</button>
-			</div>
 		</div>
 	</header>
 

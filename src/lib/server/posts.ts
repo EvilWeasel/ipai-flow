@@ -12,7 +12,7 @@ type PostRow = {
   comment_count: number;
   ai_summary: string | null;
   flagged: number;
-  users?: { username: string }[] | null;
+  users?: UserRelation | null;
 };
 
 type CommentRow = {
@@ -23,8 +23,16 @@ type CommentRow = {
   body: string;
   created_at: number;
   score: number;
-  users?: { username: string }[] | null;
+  users?: UserRelation | null;
 };
+
+type UserRelation = { username: string } | { username: string }[];
+
+function relationUsername(users: UserRelation | null | undefined, userId: number): string {
+  const user = Array.isArray(users) ? users[0] : users;
+  const username = user?.username?.trim();
+  return username || `member-${userId}`;
+}
 
 function mapPost(row: PostRow, userVote?: number | null): Post {
   return {
@@ -39,7 +47,7 @@ function mapPost(row: PostRow, userVote?: number | null): Post {
     comment_count: row.comment_count,
     ai_summary: row.ai_summary,
     flagged: row.flagged,
-    username: row.users?.[0]?.username,
+    username: relationUsername(row.users, row.user_id),
     user_vote: userVote ?? undefined,
   };
 }
@@ -53,7 +61,7 @@ function mapComment(row: CommentRow, userVote?: number | null): Comment {
     body: row.body,
     created_at: row.created_at,
     score: row.score,
-    username: row.users?.[0]?.username,
+    username: relationUsername(row.users, row.user_id),
     user_vote: userVote ?? undefined,
   };
 }

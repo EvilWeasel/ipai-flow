@@ -1,6 +1,7 @@
 import type { PageServerLoad, Actions } from "./$types";
 import { fail, redirect } from "@sveltejs/kit";
 import { listPosts, vote } from "$lib/server/posts";
+import { rateLimit } from "$lib/server/rate-limit";
 
 export const load: PageServerLoad = async ({ url, locals }) => {
   const sortParam = url.searchParams.get("sort");
@@ -21,8 +22,18 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 };
 
 export const actions: Actions = {
-  vote: async ({ request, locals }) => {
+  vote: async ({ request, locals, getClientAddress }) => {
     if (!locals.user) throw redirect(303, "/login");
+    if (
+      !rateLimit({
+        scope: "feed-vote",
+        identifier: `${locals.user.id}:${getClientAddress()}`,
+        limit: 60,
+        windowMs: 60_000,
+      })
+    ) {
+      return fail(429, { message: "too many votes; please wait a moment" });
+    }
     const form = await request.formData();
     const id = Number(form.get("id"));
     const value = Number(form.get("value"));

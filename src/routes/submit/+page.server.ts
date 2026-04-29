@@ -3,6 +3,7 @@ import { fail, redirect } from "@sveltejs/kit";
 import { createPost, normalizeTagsInput } from "$lib/server/posts";
 import { moderate, summarize } from "$lib/server/ai";
 import { setAiSummary } from "$lib/server/posts";
+import { rateLimit } from "$lib/server/rate-limit";
 
 export const load: PageServerLoad = async ({ locals }) => {
   if (!locals.user) throw redirect(303, "/login?next=/submit");
@@ -21,8 +22,18 @@ function normalizeUrl(input: string): string | null {
 }
 
 export const actions: Actions = {
-  default: async ({ request, locals }) => {
+  default: async ({ request, locals, getClientAddress }) => {
     if (!locals.user) throw redirect(303, "/login");
+    if (
+      !rateLimit({
+        scope: "submit",
+        identifier: `${locals.user.id}:${getClientAddress()}`,
+        limit: 10,
+        windowMs: 60_000,
+      })
+    ) {
+      return fail(429, { message: "too many submissions; please wait a moment" });
+    }
     const form = await request.formData();
     const title = String(form.get("title") ?? "").trim();
     const urlRaw = String(form.get("url") ?? "").trim();

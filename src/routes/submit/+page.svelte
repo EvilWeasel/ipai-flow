@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { enhance } from '$app/forms';
 	import Button from '$lib/components/ui/button.svelte';
 	import Input from '$lib/components/ui/input.svelte';
 	import Label from '$lib/components/ui/label.svelte';
@@ -6,17 +7,39 @@
 	import { Bot } from 'lucide-svelte';
 
 	let { form } = $props();
+	const formData = $derived(
+		form as
+			| {
+					message?: string;
+					title?: string;
+					tagsRaw?: string;
+					urlRaw?: string;
+					body?: string;
+			  }
+			| undefined
+	);
+	let pending = $state(false);
 </script>
 
 <div class="mx-auto max-w-2xl px-4 py-6 space-y-6">
 	<header>
 		<h1 class="text-3xl font-bold tracking-tight">Submit a Post</h1>
 		<p class="text-sm text-muted-foreground mt-1">
-			Share research, tools, or thoughts with the community.
+			Share research, tools, or collaboration notes with the IPAI Flow community.
 		</p>
 	</header>
 
-	<form method="POST" class="rounded-lg border bg-card p-5 space-y-5">
+	<form
+		method="POST"
+		use:enhance={() => {
+			pending = true;
+			return async ({ update }) => {
+				await update();
+				pending = false;
+			};
+		}}
+		class="rounded-lg border bg-card p-5 space-y-5"
+	>
 		<div class="space-y-1.5">
 			<Label for="title" class="text-xs uppercase tracking-wider text-muted-foreground">
 				Title <span class="text-primary">*</span>
@@ -26,9 +49,10 @@
 				name="title"
 				required
 				maxlength={200}
-				value={form?.title ?? ''}
+				value={formData?.title ?? ''}
 				placeholder="Enter a descriptive title…"
 				class="h-11"
+				disabled={pending}
 			/>
 		</div>
 
@@ -40,8 +64,9 @@
 				id="tags"
 				name="tags"
 				maxlength={200}
-				value={form?.tagsRaw ?? ''}
+				value={formData?.tagsRaw ?? ''}
 				placeholder="AIResearch, LLMs, Architecture"
+				disabled={pending}
 			/>
 		</div>
 
@@ -59,8 +84,9 @@
 				id="url"
 				name="url"
 				type="url"
-				value={form?.urlRaw ?? ''}
+				value={formData?.urlRaw ?? ''}
 				placeholder="https://…"
+				disabled={pending}
 			/>
 		</div>
 
@@ -76,18 +102,21 @@
 				id="body"
 				name="body"
 				rows={7}
-				value={form?.body ?? ''}
+				value={formData?.body ?? ''}
 				placeholder="Discuss your topic…"
+				disabled={pending}
 			/>
 		</div>
 
-		{#if form?.message}
-			<p class="text-sm text-destructive">{form.message}</p>
+		{#if formData?.message}
+			<p class="text-sm text-destructive" role="alert">{formData.message}</p>
 		{/if}
 
 		<div class="flex justify-end gap-2 pt-1">
-			<Button href="/" variant="ghost">Cancel</Button>
-			<Button type="submit" class="uppercase tracking-wider">Submit Post</Button>
+			<Button href="/" variant="ghost" aria-disabled={pending}>Cancel</Button>
+			<Button type="submit" class="uppercase tracking-wider" disabled={pending}>
+				{pending ? 'Submitting…' : 'Submit Post'}
+			</Button>
 		</div>
 	</form>
 
@@ -97,13 +126,12 @@
 		</span>
 		<div class="text-sm leading-relaxed">
 			<p class="text-xs uppercase tracking-wider text-muted-foreground mb-1">
-				AI-Assisted Moderation
+				Safety Checks
 			</p>
 			<p class="text-muted-foreground">
-				To maintain a high-signal environment, all submissions are pre-screened by our AI
-				moderation system for quality and relevance to the IPAI guidelines. This process is
-				fully GDPR compliant — no email or personally identifiable information is required,
-				processed, or stored.
+				Submissions are screened with local safety checks and optional AI assistance.
+				IPAI Flow is designed for data minimization: username-only accounts, no email
+				required.
 			</p>
 		</div>
 	</aside>

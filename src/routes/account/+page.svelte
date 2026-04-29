@@ -11,7 +11,7 @@
 <div class="mx-auto max-w-2xl px-4 py-6 space-y-6">
 	<header>
 		<h1 class="text-3xl font-bold tracking-tight">Account</h1>
-		<p class="text-sm text-muted-foreground">Manage your IPAI Community profile.</p>
+		<p class="text-sm text-muted-foreground">Manage your IPAI Flow profile.</p>
 	</header>
 
 	<section class="rounded-lg border bg-card p-5">
@@ -38,7 +38,7 @@
 	<section class="rounded-lg border bg-card p-5 flex items-start gap-3">
 		<ShieldCheck class="h-5 w-5 mt-0.5 text-primary" />
 		<div class="text-sm text-muted-foreground leading-relaxed">
-			<p class="text-foreground font-medium mb-1">GDPR-friendly account</p>
+			<p class="text-foreground font-medium mb-1">Data-minimized account</p>
 			Your account holds nothing but a username and a salted password hash. No email, no
 			tracking, no third-party storage.
 		</div>

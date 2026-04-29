@@ -1,5 +1,10 @@
--- IPAI Community Supabase schema
+-- IPAI Flow Supabase schema
 -- Run this in Supabase SQL Editor once.
+--
+-- Demo note: this baseline schema keeps RLS disabled and grants broad anon
+-- privileges for the original hackathon setup. Before exposing a project
+-- publicly, either add proper RLS policies or apply server_only_grants.sql and
+-- use Supabase only from trusted server-side code with the service role key.
 
 create table if not exists public.users (
   id bigint generated always as identity primary key,

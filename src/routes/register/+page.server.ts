@@ -8,6 +8,7 @@ import {
   setSessionCookie,
   usernameExists,
 } from "$lib/server/auth";
+import { rateLimit } from "$lib/server/rate-limit";
 
 export const load: PageServerLoad = async ({ locals }) => {
   if (locals.user) throw redirect(303, "/");
@@ -15,7 +16,17 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 export const actions: Actions = {
-  default: async ({ request, cookies }) => {
+  default: async ({ request, cookies, getClientAddress }) => {
+    if (
+      !rateLimit({
+        scope: "register",
+        identifier: getClientAddress(),
+        limit: 5,
+        windowMs: 10 * 60_000,
+      })
+    ) {
+      return fail(429, { message: "too many registration attempts; please wait a few minutes" });
+    }
     const form = await request.formData();
     const username = String(form.get("username") ?? "").trim();
     const password = String(form.get("password") ?? "");

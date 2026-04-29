@@ -5,16 +5,40 @@
 	import { ChevronUp, MessageSquare, RefreshCw, Send, Sparkles } from 'lucide-svelte';
 	import { hostname, tagsOf, timeAgo } from '$lib/utils';
 	import type { Comment } from '$lib/server/db';
+	import type { SubmitFunction } from '@sveltejs/kit';
+	import type { ActionData, PageData } from './$types';
 
-	let { data } = $props();
+	type CommentActionData = ActionData & {
+		body?: string;
+		parentId?: number | null;
+		message?: string;
+	};
+
+	let { data, form }: { data: PageData; form: CommentActionData } = $props();
 	let summarizing = $state(false);
 	let initialSummary = $derived(data.post.ai_summary ?? '');
 	let summary = $state('');
 	let summaryError = $state('');
 	const tags = $derived(tagsOf(data.post.tags));
+	let commentSort = $state<'top' | 'new'>('top');
+	let rootCommentBody = $state('');
+	let replyBodies = $state<Record<number, string>>({});
+	let rootCommentPending = $state(false);
+	let replyPendingId = $state<number | null>(null);
 
 	$effect(() => {
 		summary = initialSummary;
+	});
+
+	$effect(() => {
+		if (form?.body) {
+			if (form.parentId) {
+				replyBodies[form.parentId] = form.body;
+				replyTo = form.parentId;
+			} else {
+				rootCommentBody = form.body;
+			}
+		}
 	});
 
 	async function generateSummary() {
@@ -67,10 +91,42 @@
 				roots.push(node);
 			}
 		}
+		const bySelectedSort = (a: CommentNode, b: CommentNode) => {
+			if (commentSort === 'new') return b.created_at - a.created_at;
+			return b.score - a.score || a.created_at - b.created_at;
+		};
+		const sortBranch = (nodes: CommentNode[]) => {
+			nodes.sort(bySelectedSort);
+			for (const node of nodes) sortBranch(node.children);
+		};
+		sortBranch(roots);
 		return roots;
 	});
 
 	let replyTo = $state<number | null>(null);
+
+	const enhanceRootComment: SubmitFunction = () => {
+		rootCommentPending = true;
+		return async ({ result, update }) => {
+			await update({ reset: result.type === 'success' });
+			rootCommentPending = false;
+			if (result.type === 'success') rootCommentBody = '';
+		};
+	};
+
+	function enhanceReply(parentId: number): SubmitFunction {
+		return () => {
+			replyPendingId = parentId;
+			return async ({ result, update }) => {
+				await update({ reset: result.type === 'success' });
+				replyPendingId = null;
+				if (result.type === 'success') {
+					replyBodies[parentId] = '';
+					replyTo = null;
+				}
+			};
+		};
+	}
 
 	function avatarColor(name: string): string {
 		const colors = [
@@ -169,7 +225,7 @@
 					<div class="flex items-center justify-between gap-2 mb-2">
 						<div class="flex items-center gap-2 text-sm font-semibold text-primary">
 							<Sparkles class="h-4 w-4" />
-							AI Generated Summary
+							AI Summary
 						</div>
 						<Button
 							type="button"
@@ -203,12 +259,26 @@
 				Discussions
 				<span class="text-muted-foreground font-normal">({data.post.comment_count})</span>
 			</h2>
-			<button
-				type="button"
-				class="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
-			>
-				Sort by <span class="text-foreground">Top</span>
-			</button>
+			<div class="inline-flex rounded-md border border-border p-0.5 text-xs">
+				<button
+					type="button"
+					class="rounded px-2 py-1 transition-colors {commentSort === 'top'
+						? 'bg-primary text-primary-foreground'
+						: 'text-muted-foreground hover:text-foreground'}"
+					onclick={() => (commentSort = 'top')}
+				>
+					Top
+				</button>
+				<button
+					type="button"
+					class="rounded px-2 py-1 transition-colors {commentSort === 'new'
+						? 'bg-primary text-primary-foreground'
+						: 'text-muted-foreground hover:text-foreground'}"
+					onclick={() => (commentSort = 'new')}
+				>
+					New
+				</button>
+			</div>
 		</div>
 
 		{#if tree.length === 0}
@@ -264,40 +334,39 @@
 										<MessageSquare class="h-3 w-3" /> Reply
 									</button>
 								{/if}
-								<button
-									type="button"
-									class="hover:text-foreground"
-									aria-label="Report comment"
-								>
-									Report
-								</button>
 							</div>
 
 							{#if replyTo === c.id && data.user}
 								<form
 									method="POST"
 									action="?/comment"
-									use:enhance={() => {
-										return async ({ update }) => {
-											await update();
-											replyTo = null;
-										};
-									}}
+									use:enhance={enhanceReply(c.id)}
 									class="mt-3 space-y-2"
 								>
 									<input type="hidden" name="parent_id" value={c.id} />
-									<Textarea name="body" placeholder="Write a reply…" required rows={3} />
+									<Textarea
+										name="body"
+										placeholder="Write a reply…"
+										required
+										rows={3}
+										bind:value={replyBodies[c.id]}
+										disabled={replyPendingId === c.id}
+									/>
+									{#if form?.message && form.parentId === c.id}
+										<p class="text-sm text-destructive">{form.message}</p>
+									{/if}
 									<div class="flex justify-end gap-2">
 										<Button
 											type="button"
 											size="sm"
 											variant="ghost"
 											onclick={() => (replyTo = null)}
+											disabled={replyPendingId === c.id}
 										>
 											Cancel
 										</Button>
-										<Button type="submit" size="sm">
-											<Send class="h-3.5 w-3.5" /> Reply
+										<Button type="submit" size="sm" disabled={replyPendingId === c.id}>
+											<Send class="h-3.5 w-3.5" /> {replyPendingId === c.id ? 'Posting…' : 'Reply'}
 										</Button>
 									</div>
 								</form>
@@ -319,11 +388,21 @@
 		{/if}
 
 		{#if data.user}
-			<form method="POST" action="?/comment" use:enhance class="mt-6 space-y-2 rounded-lg border bg-card p-3">
-				<Textarea name="body" placeholder="Add to the discussion…" required rows={3} />
+			<form method="POST" action="?/comment" use:enhance={enhanceRootComment} class="mt-6 space-y-2 rounded-lg border bg-card p-3">
+				<Textarea
+					name="body"
+					placeholder="Add to the discussion…"
+					required
+					rows={3}
+					bind:value={rootCommentBody}
+					disabled={rootCommentPending}
+				/>
+				{#if form?.message && !form.parentId}
+					<p class="text-sm text-destructive">{form.message}</p>
+				{/if}
 				<div class="flex justify-end">
-					<Button type="submit" size="sm" class="uppercase tracking-wider">
-						<Send class="h-3.5 w-3.5" /> Insert Reply
+					<Button type="submit" size="sm" class="uppercase tracking-wider" disabled={rootCommentPending}>
+						<Send class="h-3.5 w-3.5" /> {rootCommentPending ? 'Posting…' : 'Post Comment'}
 					</Button>
 				</div>
 			</form>

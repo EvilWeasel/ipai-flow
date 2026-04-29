@@ -2,6 +2,7 @@ import type { PageServerLoad, Actions } from "./$types";
 import { error, fail, redirect } from "@sveltejs/kit";
 import { createComment, getComments, getPost, vote } from "$lib/server/posts";
 import { moderate } from "$lib/server/ai";
+import { rateLimit } from "$lib/server/rate-limit";
 
 export const load: PageServerLoad = async ({ params, locals }) => {
   const id = Number(params.id);
@@ -19,31 +20,61 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 };
 
 export const actions: Actions = {
-  comment: async ({ request, params, locals }) => {
+  comment: async ({ request, params, locals, getClientAddress }) => {
     if (!locals.user) throw redirect(303, "/login");
+    if (
+      !rateLimit({
+        scope: "comment",
+        identifier: `${locals.user.id}:${getClientAddress()}`,
+        limit: 20,
+        windowMs: 60_000,
+      })
+    ) {
+      return fail(429, { message: "too many comments; please wait a moment" });
+    }
     const id = Number(params.id);
     const form = await request.formData();
     const body = String(form.get("body") ?? "").trim();
     const parentRaw = form.get("parent_id");
     const parentId = parentRaw ? Number(parentRaw) : null;
     if (!body || body.length > 10_000) {
-      return fail(400, { message: "comment must be 1–10,000 characters" });
+      return fail(400, {
+        message: "comment must be 1–10,000 characters",
+        body,
+        parentId,
+      });
     }
     const mod = await moderate(body);
     if (!mod.ok) {
       return fail(400, {
         message: `blocked by moderation: ${mod.reason ?? "unsafe"}`,
+        body,
+        parentId,
       });
     }
     try {
       await createComment({ userId: locals.user.id, postId: id, parentId, body });
     } catch {
-      return fail(503, { message: "comment unavailable right now" });
+      return fail(503, {
+        message: "comment unavailable right now",
+        body,
+        parentId,
+      });
     }
     return { ok: true };
   },
-  vote: async ({ request, locals }) => {
+  vote: async ({ request, locals, getClientAddress }) => {
     if (!locals.user) throw redirect(303, "/login");
+    if (
+      !rateLimit({
+        scope: "detail-vote",
+        identifier: `${locals.user.id}:${getClientAddress()}`,
+        limit: 60,
+        windowMs: 60_000,
+      })
+    ) {
+      return fail(429, { message: "too many votes; please wait a moment" });
+    }
     const form = await request.formData();
     const kind = String(form.get("kind"));
     const targetId = Number(form.get("id"));
